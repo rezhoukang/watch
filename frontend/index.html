@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=5">
+<link rel="stylesheet" href="/style.css?v=13">
 </head>
 <body>
 <div class="app">
@@ -44,37 +44,41 @@
     </div>
   </section>
 
-  <!-- ========== 图片检测 ========== -->
+  <!-- ========== 图片检测（图库 / 结果 两个子页面）========== -->
   <section class="panel" id="tab-detect">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="detConf" value="0.25" min="0.01" max="0.99" step="0.05"></label>
+      <label>置信度 <input type="number" id="detConf" value="0.05" min="0.01" max="0.99" step="0.05"></label>
       <label>模型 <select id="detWeights"></select></label>
-      <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" placeholder="person, car, 书本" size="22"></label>
-      <button class="btn small" id="refreshImages">刷新列表</button>
+      <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" value="person" placeholder="person, car, 书本" size="22"></label>
     </div>
-    <div class="mode-hint" id="detMode"></div>
-    <div class="split">
-      <div>
-        <h2>待检测图片</h2>
-        <div class="grid" id="imageGrid"></div>
+
+    <nav class="subnav">
+      <button class="subtab active" data-sub="images">待检测图片</button>
+      <button class="subtab" data-sub="result">检测结果</button>
+      <div class="subnav-right">
+        <span class="subnav-status" id="detResultName"></span>
+        <button class="btn small ghost" id="refreshImages">刷新列表</button>
       </div>
-      <div>
-        <h2>检测结果</h2>
-        <div id="detectResult" class="result-box">点击左侧图片开始检测</div>
-      </div>
+    </nav>
+
+    <div class="subpanel active" id="detect-pane-images">
+      <div class="grid" id="imageGrid"></div>
+    </div>
+
+    <div class="subpanel" id="detect-pane-result">
+      <div id="detectResult" class="result-box">点击「待检测图片」里的图片开始检测</div>
     </div>
   </section>
 
   <!-- ========== 视频检测 ========== -->
   <section class="panel" id="tab-video">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="vidConf" value="0.25" min="0.01" max="0.99" step="0.05"></label>
+      <label>置信度 <input type="number" id="vidConf" value="0.05" min="0.01" max="0.99" step="0.05"></label>
       <label>抽帧间隔 <input type="number" id="vidStride" value="1" min="1" max="30" step="1"></label>
       <label>模型 <select id="vidWeights"></select></label>
-      <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" placeholder="person, car" size="20"></label>
+      <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" value="person" placeholder="person, car" size="20"></label>
       <button class="btn small" id="refreshVideos">刷新列表</button>
     </div>
-    <div class="mode-hint" id="vidMode"></div>
     <div class="split">
       <div>
         <h2>视频列表</h2>
@@ -121,6 +125,12 @@
   </footer>
 </div>
 
-<script src="/app.js?v=6"></script>
+<!-- 缩略图悬浮大图预览（随鼠标定位） -->
+<div class="hover-preview" id="hoverPreview">
+  <img src="" alt="">
+  <div class="cap" id="hoverPreviewCap"></div>
+</div>
+
+<script src="/app.js?v=16"></script>
 </body>
 </html>

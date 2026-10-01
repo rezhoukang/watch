@@ -117,6 +117,7 @@ def yolo_status() -> dict:
         "message": message,
         "models": models,
         "world_models": world_models,           # 属于 YOLO-World 的权重
+        "default_model": vision.DEFAULT_WEIGHTS,  # 前端下拉框默认选中它
         "clip_available": vision.clip_available(),  # World 所需的文本编码器依赖
     }
 

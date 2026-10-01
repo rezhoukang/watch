@@ -9,14 +9,14 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
-MODELS_DIR = BASE_DIR / "models"            # 权重文件（首次使用自动下载）
+MODELS_DIR = BASE_DIR / "models"            # 唯一的权重目录（含自动下载的缓存）
 RESULTS_DIR = BASE_DIR / "data" / "results"  # 检测结果图
 VIDEO_DIR = BASE_DIR / "data" / "videos"     # 上传的视频
 OUTPUT_DIR = BASE_DIR / "data" / "outputs"   # 检测结果视频
 DATASETS_DIR = BASE_DIR / "data" / "datasets"  # 训练数据集
 RUNS_DIR = BASE_DIR / "data" / "runs"        # 训练输出
 
-DEFAULT_WEIGHTS = "yolov8n.pt"
+DEFAULT_WEIGHTS = "yolov8m-worldv2.pt"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"}
 
@@ -35,6 +35,36 @@ JOBS: dict[str, dict] = {}
 def _ensure_dirs() -> None:
     for d in (MODELS_DIR, RESULTS_DIR, VIDEO_DIR, OUTPUT_DIR, DATASETS_DIR, RUNS_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+_unified_weights_dir = False
+
+
+def _unify_weights_dir() -> None:
+    """把 ultralytics 的自动下载目录从默认的 weights/ 改到 models/。
+
+    不改的话项目里会出现两个权重目录：
+      - models/            本项目的业务权重目录（后端只扫这里生成下拉框）
+      - weights/           ultralytics 默认目录，CLIP 文本编码器（337MB）会下到这里
+    注意 ultralytics.nn.text_model 是 import 时绑定 WEIGHTS_DIR 的，
+    必须连它一起改，否则 CLIP 会在新位置重新下载一遍。
+    CLIP 落在 models/clip/ 子目录，而模型清单只扫 models/*.pt（不递归），不会互相污染。
+    """
+    global _unified_weights_dir
+    if _unified_weights_dir:
+        return
+    try:
+        import ultralytics.nn.text_model as _text_model
+        import ultralytics.utils as _utils
+
+        _utils.SETTINGS["weights_dir"] = str(MODELS_DIR)
+        _utils.WEIGHTS_DIR = MODELS_DIR
+        # text_model 里是 `from ultralytics.utils import WEIGHTS_DIR`，属于导入来的
+        # 名字而非该模块自身的导出，所以类型检查器不认这个属性（运行时确实存在）。
+        _text_model.WEIGHTS_DIR = MODELS_DIR  # type: ignore[attr-defined]
+    except ImportError:
+        pass  # 依赖未装好时静默跳过，Web 服务照常启动
+    _unified_weights_dir = True
 
 
 def yolo_available() -> tuple[bool, str]:
@@ -95,12 +125,15 @@ def get_model(weights: str = DEFAULT_WEIGHTS, classes: list[str] | None = None) 
     返回 Any：ultralytics 的类型标注不完整，强类型反而会误报。
     """
     _ensure_dirs()
+    _unify_weights_dir()
     with _lock:
         if weights not in _model_cache:
             # 只认文件名，防止路径穿越；下载缓存放 models/
             name = Path(weights).name
             local = MODELS_DIR / name
-            path = str(local) if local.exists() else name
+            # 始终传绝对路径：ultralytics 拼下载 URL 时只取文件名，
+            # 但落盘用的是传入路径——传裸文件名会把新下载的权重丢到当前工作目录
+            path = str(local)
 
             if is_world_weights(weights):
                 from ultralytics import YOLOWorld
@@ -162,15 +195,25 @@ def detect_image(
     cv2.imwrite(str(out_path), r.plot())
 
     names = r.names
+    orig_h, orig_w = r.orig_shape
     detections = []
     for box in r.boxes:
         cls_id = int(box.cls[0])
+        x1, y1, x2, y2 = (round(float(v), 2) for v in box.xyxy[0].tolist())
         detections.append(
             {
                 "class_id": cls_id,
                 "class_name": names.get(cls_id, str(cls_id)),
                 "confidence": round(float(box.conf[0]), 4),
-                "bbox": [round(float(v), 2) for v in box.xyxy[0].tolist()],
+                # 左上右下（原图像素）——画框、裁剪用
+                "bbox": [x1, y1, x2, y2],
+                # 中心点 + 宽高（原图像素）——由 bbox 反算，保证两者严格自洽
+                "bbox_cxcywh": [
+                    round((x1 + x2) / 2, 2),
+                    round((y1 + y2) / 2, 2),
+                    round(x2 - x1, 2),
+                    round(y2 - y1, 2),
+                ],
             }
         )
 
@@ -189,6 +232,8 @@ def detect_image(
         "source": src.name,
         "result": out_name,
         "result_url": f"/results/{out_name}",
+        "image_width": int(orig_w),
+        "image_height": int(orig_h),
         "count": len(detections),
         "summary": summary,
         "detections": detections,
@@ -398,10 +443,9 @@ def _run_train_job(
 
 
 def _resolve_weights(weights: str) -> str:
-    """训练起点权重：models/ 里有的用本地，否则用官方名（自动下载）"""
-    name = Path(weights).name
-    local = MODELS_DIR / name
-    return str(local) if local.exists() else name
+    """训练起点权重：统一指向 models/，文件不存在时由 ultralytics 下到那里"""
+    _unify_weights_dir()
+    return str(MODELS_DIR / Path(weights).name)
 
 
 def _extract_metrics(trainer) -> dict:
