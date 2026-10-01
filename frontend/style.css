@@ -189,6 +189,23 @@ input[type="number"] { width: 88px; }
 .hint { font-size: 12px; color: #80868b; margin-top: 10px; }
 .hint code { background: #f1f3f4; padding: 1px 5px; border-radius: 4px; }
 
+/* 模型模式提示条（普通 YOLO / YOLO-World） */
+.mode-hint {
+  font-size: 12px;
+  color: #5f6368;
+  background: #fff;
+  border-left: 3px solid #dadce0;
+  border-radius: 6px;
+  padding: 7px 12px;
+  margin: -8px 0 16px;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mode-hint.world { border-left-color: #1a73e8; background: #f0f7ff; color: #174ea6; }
+.mode-hint b { font-weight: 600; }
+
 /* 页脚 */
 .foot {
   margin-top: 26px;

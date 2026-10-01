@@ -121,6 +121,51 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 /* ==================== 环境状态 ==================== */
 
+/* ==================== 环境状态 / 模型模式（普通 YOLO ↔ YOLO-World）==================== */
+
+let WORLD_MODELS = [];   // 属于 YOLO-World 的权重文件名（由后端告知）
+let CLIP_OK = false;     // World 所需的文本编码器依赖是否就绪
+
+/** 填充下拉框：World 权重前加 🌍，并尽量保留原选择 */
+function fillSelect(id, names) {
+  const sel = el(id);
+  const cur = sel.value;
+  sel.innerHTML = '';
+  if (!names.length) {
+    sel.innerHTML = '<option value="">（无可用权重）</option>';
+    return;
+  }
+  names.forEach((m) => {
+    const o = document.createElement('option');
+    o.value = m;
+    o.textContent = WORLD_MODELS.includes(m) ? `🌍 ${m}` : m;
+    sel.appendChild(o);
+  });
+  if (cur && names.includes(cur)) sel.value = cur;
+}
+
+/** 切换"类别输入框"的显示，并更新模式提示条 */
+function syncModeUi(selId, wrapId, hintId) {
+  const sel = el(selId);
+  const wrap = el(wrapId);
+  const hint = el(hintId);
+  const name = sel.value || '';
+  const isWorld = WORLD_MODELS.includes(name);
+
+  wrap.hidden = !isWorld;
+
+  if (isWorld) {
+    hint.className = 'mode-hint world';
+    hint.innerHTML = CLIP_OK
+      ? `🌍 <b>YOLO-World 模式</b>（${esc(name)}）：prompt 可用中英文随意写（如 <code>person, 书本</code>），留空则用权重内置类别`
+      : `⚠ 已选 World 权重（${esc(name)}），但缺少 <code>clip</code> 依赖，无法使用。` +
+        `请执行 <code>pip install "git+https://github.com/ultralytics/CLIP.git"</code>`;
+  } else {
+    hint.className = 'mode-hint';
+    hint.innerHTML = `🔒 <b>普通 YOLO 模式</b>（${esc(name)}）：类别固定为权重内置的 COCO 80 类，不能用文字指定`;
+  }
+}
+
 async function loadEnv() {
   const badge = el('envStatus');
   try {
@@ -128,23 +173,37 @@ async function loadEnv() {
     badge.textContent = s.message;
     badge.className = 'badge ' + (s.available ? 'ok' : 'err');
 
-    const opts = s.models.length ? s.models : ['yolov8n.pt'];
-    ['detWeights', 'trainWeights'].forEach((id) => {
-      const sel = el(id);
-      const cur = sel.value;
-      sel.innerHTML = '';
-      opts.forEach((m) => {
-        const o = document.createElement('option');
-        o.value = m;
-        o.textContent = m;
-        sel.appendChild(o);
-      });
-      if (cur && opts.includes(cur)) sel.value = cur;
-    });
+    WORLD_MODELS = s.world_models || [];
+    CLIP_OK = !!s.clip_available;
+
+    const all = s.models.length ? s.models : ['yolov8n.pt'];
+    fillSelect('detWeights', all);   // 图片检测：全部模型
+    fillSelect('vidWeights', all);   // 视频检测：全部模型
+    // 训练：排除 World 权重（训练走普通 YOLO 流程，喂 World 权重会失败）
+    fillSelect('trainWeights', all.filter((m) => !WORLD_MODELS.includes(m)));
+
+    syncModeUi('detWeights', 'detClassesWrap', 'detMode');
+    syncModeUi('vidWeights', 'vidClassesWrap', 'vidMode');
   } catch (e) {
     badge.textContent = '状态获取失败：' + (e instanceof Error ? e.message : String(e));
     badge.className = 'badge err';
   }
+}
+
+// 切换模型 → 立即更新模式提示与类别输入框
+el('detWeights').addEventListener('change', () =>
+  syncModeUi('detWeights', 'detClassesWrap', 'detMode')
+);
+el('vidWeights').addEventListener('change', () =>
+  syncModeUi('vidWeights', 'vidClassesWrap', 'vidMode')
+);
+
+/** 读取当前检测设置（图片/视频共用） */
+function readDetectOptions(prefix) {
+  const weights = el(`${prefix}Weights`).value || 'yolov8n.pt';
+  const isWorld = WORLD_MODELS.includes(weights);
+  const classes = isWorld ? el(`${prefix}Classes`).value.trim() : '';
+  return { weights, isWorld, classes };
 }
 
 /* ==================== 上传（图片 / 视频）==================== */
@@ -254,15 +313,18 @@ async function detectImage(filename) {
   try {
     // 1) 先取参数（元素缺失会被 catch 住并显示出来）
     const conf = el('detConf').value || '0.25';
-    const weights = el('detWeights').value || 'yolov8n.pt';
+    const { weights, isWorld, classes } = readDetectOptions('det');
+    const modeText = isWorld
+      ? `🌍 World${classes ? `｜类别「${classes}」` : '｜类别=权重内置'}`
+      : '普通 YOLO';
 
     // 2) 实时计时，区分"在跑"和"卡死"
     const paint = () => {
       box.innerHTML =
         `<div>检测中… <b>${((Date.now() - t0) / 1000).toFixed(1)}s</b></div>` +
         `<div style="font-size:12px;color:#80868b;margin-top:6px">` +
-        `图片：${esc(filename)}｜置信度 ${esc(conf)}｜模型 ${esc(weights)}<br>` +
-        `（第一次检测要加载模型，约 10~30 秒；超过 300 秒会自动报超时）</div>`;
+        `图片：${esc(filename)}｜置信度 ${esc(conf)}｜${esc(modeText)}<br>` +
+        `（第一次检测要加载模型；World 切换类别还要编码文字；超过 300 秒自动报超时）</div>`;
     };
     paint();
     ticker = setInterval(paint, 200);
@@ -270,7 +332,8 @@ async function detectImage(filename) {
     // 3) 请求后端（图片检测允许长耗时）
     const url =
       `/api/detect/image/${encodeURIComponent(filename)}` +
-      `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}`;
+      `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}` +
+      (classes ? `&classes=${encodeURIComponent(classes)}` : '');
     const r = await api(url, { method: 'POST' }, 300000);
 
     // 4) 渲染结果（字段缺失时明确报错，而不是静默空白）
@@ -283,9 +346,16 @@ async function detectImage(filename) {
       .join('、');
 
     let html = `<img src="${esc(r.result_url)}?t=${Date.now()}" alt="检测结果">`;
+    const clsList = ((r.classes_used) || []).map(String);
+    const clsShort =
+      clsList.length > 12
+        ? clsList.slice(0, 12).join('、') + `…（共 ${clsList.length} 类）`
+        : clsList.join('、');
+    const modeLabel = r.mode === 'world' ? '🌍 World' : '普通 YOLO';
     html +=
       `<div class="summary">检出 ${esc(r.count)} 个目标${summary ? '：' + esc(summary) : ''}` +
-      `<span style="color:#80868b;font-weight:400">（耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s）</span></div>`;
+      `<span style="color:#80868b;font-weight:400">（${esc(modeLabel)}｜当前类别：${esc(clsShort) || '?'}｜` +
+      `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s）</span></div>`;
 
     if (Array.isArray(r.detections) && r.detections.length) {
       html += '<table><tr><th>类别</th><th>置信度</th><th>位置 (x1,y1,x2,y2)</th></tr>';
@@ -351,16 +421,22 @@ async function detectVideo(filename, btn) {
   try {
     const conf = el('vidConf').value || '0.25';
     const stride = el('vidStride').value || '1';
+    const { weights, isWorld, classes } = readDetectOptions('vid');
+    const modeText = isWorld
+      ? `🌍 World${classes ? `｜类别「${classes}」` : '｜类别=权重内置'}`
+      : '普通 YOLO';
 
     btn.disabled = true;
     box.innerHTML =
       `<div>提交中… <b>${((Date.now() - t0) / 1000).toFixed(1)}s</b></div>` +
-      `<div style="font-size:12px;color:#80868b">视频：${esc(filename)}｜置信度 ${esc(conf)}｜抽帧间隔 ${esc(stride)}</div>`;
+      `<div style="font-size:12px;color:#80868b">视频：${esc(filename)}｜置信度 ${esc(conf)}｜抽帧间隔 ${esc(stride)}｜${esc(modeText)}</div>`;
 
     // 提交任务：30 秒内必须返回 job_id
     const res = await api(
       `/api/detect/video/${encodeURIComponent(filename)}` +
-        `?conf=${encodeURIComponent(conf)}&stride=${encodeURIComponent(stride)}`,
+        `?conf=${encodeURIComponent(conf)}&stride=${encodeURIComponent(stride)}` +
+        `&weights=${encodeURIComponent(weights)}` +
+        (classes ? `&classes=${encodeURIComponent(classes)}` : ''),
       { method: 'POST' },
       30000
     );

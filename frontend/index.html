@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=3">
+<link rel="stylesheet" href="/style.css?v=5">
 </head>
 <body>
 <div class="app">
@@ -47,10 +47,12 @@
   <!-- ========== 图片检测 ========== -->
   <section class="panel" id="tab-detect">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="detConf" value="0.25" min="0.05" max="0.95" step="0.05"></label>
+      <label>置信度 <input type="number" id="detConf" value="0.25" min="0.01" max="0.99" step="0.05"></label>
       <label>模型 <select id="detWeights"></select></label>
+      <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" placeholder="person, car, 书本" size="22"></label>
       <button class="btn small" id="refreshImages">刷新列表</button>
     </div>
+    <div class="mode-hint" id="detMode"></div>
     <div class="split">
       <div>
         <h2>待检测图片</h2>
@@ -66,10 +68,13 @@
   <!-- ========== 视频检测 ========== -->
   <section class="panel" id="tab-video">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="vidConf" value="0.25" min="0.05" max="0.95" step="0.05"></label>
+      <label>置信度 <input type="number" id="vidConf" value="0.25" min="0.01" max="0.99" step="0.05"></label>
       <label>抽帧间隔 <input type="number" id="vidStride" value="1" min="1" max="30" step="1"></label>
+      <label>模型 <select id="vidWeights"></select></label>
+      <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" placeholder="person, car" size="20"></label>
       <button class="btn small" id="refreshVideos">刷新列表</button>
     </div>
+    <div class="mode-hint" id="vidMode"></div>
     <div class="split">
       <div>
         <h2>视频列表</h2>
@@ -116,6 +121,6 @@
   </footer>
 </div>
 
-<script src="/app.js?v=4"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>

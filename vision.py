@@ -25,6 +25,8 @@ _lock = threading.RLock()
 # 用 Any 而非 object：ultralytics 的类型标注不完整，标成 object 会让
 # Pylance 把 model.predict / results[0] / .boxes 等全判为不可访问
 _model_cache: dict[str, Any] = {}
+# World 模型当前生效的类别（文本提示）缓存 —— 类别没变就不重复 set_classes
+_model_classes: dict[str, tuple[str, ...]] = {}
 
 # 后台任务表（训练 / 视频处理）
 JOBS: dict[str, dict] = {}
@@ -61,24 +63,72 @@ def device_arg() -> "int | str":
         return "cpu"
 
 
-def get_model(weights: str = DEFAULT_WEIGHTS) -> Any:
+# ---------- YOLO-World（开放词表）支持 ----------
+def is_world_weights(weights: str) -> bool:
+    """是否为 YOLO-World 权重（按文件名判断，如 yolov8s-worldv2.pt）"""
+    return "world" in Path(weights).name.lower()
+
+
+def clip_available() -> bool:
+    """YOLO-World 靠 CLIP 做文本编码，检查该依赖是否已安装"""
+    import importlib.util
+
+    return importlib.util.find_spec("clip") is not None
+
+
+def world_ready(weights: str) -> tuple[bool, str]:
+    """判断指定权重当前能否使用，返回 (是否可用, 说明)"""
+    if not is_world_weights(weights):
+        return True, "普通 YOLO（类别固定为权重内置类别）"
+    if not clip_available():
+        return False, '缺少 clip 依赖，请执行：pip install "git+https://github.com/ultralytics/CLIP.git"'
+    return True, "YOLO-World 开放词表（类别可用文字随意指定）"
+
+
+def get_model(weights: str = DEFAULT_WEIGHTS, classes: list[str] | None = None) -> Any:
     """加载并缓存模型（权重不存在会自动下载到 models/ 目录）
 
-    返回 Any：ultralytics 的 YOLO 类型标注不完整，强类型反而会误报。
+    - 文件名含 world → 走 YOLO-World（开放词表），可用 classes 传任意类别文字
+    - 其它权重 → 走普通 YOLO（类别固定为权重内置类别，classes 被忽略）
+    - classes 与上次相同则跳过 set_classes（文本编码较慢，能省则省）
+
+    返回 Any：ultralytics 的类型标注不完整，强类型反而会误报。
     """
     _ensure_dirs()
     with _lock:
-        if weights in _model_cache:
-            return _model_cache[weights]
+        if weights not in _model_cache:
+            # 只认文件名，防止路径穿越；下载缓存放 models/
+            name = Path(weights).name
+            local = MODELS_DIR / name
+            path = str(local) if local.exists() else name
 
-        from ultralytics import YOLO
+            if is_world_weights(weights):
+                from ultralytics import YOLOWorld
 
-        # 只认文件名，防止路径穿越；下载缓存放 models/
-        name = Path(weights).name
-        local = MODELS_DIR / name
-        model = YOLO(str(local) if local.exists() else name)
-        _model_cache[weights] = model
+                _model_cache[weights] = YOLOWorld(path)
+            else:
+                from ultralytics import YOLO
+
+                _model_cache[weights] = YOLO(path)
+
+            _model_classes.pop(weights, None)  # 新实例，类别状态重置
+
+        model = _model_cache[weights]
+
+        # World 模型：按需切换类别（文字 → 类别嵌入）
+        if classes and is_world_weights(weights):
+            key = tuple(classes)
+            if _model_classes.get(weights) != key:
+                model.set_classes(list(key))
+                _model_classes[weights] = key
+
         return model
+
+
+def current_classes(weights: str) -> list[str] | None:
+    """当前模型生效的 World 类别（没设过则返回 None，表示用权重内置类别）"""
+    key = _model_classes.get(weights)
+    return list(key) if key else None
 
 
 def clear_model_cache() -> int:
@@ -93,12 +143,16 @@ def detect_image(
     src: Path,
     weights: str = DEFAULT_WEIGHTS,
     conf: float = 0.25,
+    classes: list[str] | None = None,
 ) -> dict:
-    """检测单张图片，保存带框结果，返回检测详情"""
+    """检测单张图片，保存带框结果，返回检测详情
+
+    classes: 仅对 World 模型生效；为空则使用权重内置类别
+    """
     _ensure_dirs()
     import cv2
 
-    model = get_model(weights)
+    model = get_model(weights, classes=classes)
     results = model.predict(source=str(src), conf=conf, device=device_arg(), verbose=False)
     r = results[0]
 
@@ -125,6 +179,12 @@ def detect_image(
     for d in detections:
         summary[d["class_name"]] = summary.get(d["class_name"], 0) + 1
 
+    # 当前生效的类别清单（给前端展示用）
+    if isinstance(names, dict):
+        classes_used = [str(v) for _, v in sorted(names.items())]
+    else:
+        classes_used = [str(v) for v in names]
+
     return {
         "source": src.name,
         "result": out_name,
@@ -132,6 +192,9 @@ def detect_image(
         "count": len(detections),
         "summary": summary,
         "detections": detections,
+        "mode": "world" if is_world_weights(weights) else "yolo",
+        "model": Path(weights).name,
+        "classes_used": classes_used,
     }
 
 
@@ -141,10 +204,12 @@ def start_video_job(
     weights: str = DEFAULT_WEIGHTS,
     conf: float = 0.25,
     stride: int = 1,
+    classes: list[str] | None = None,
 ) -> str:
     """启动视频检测后台任务，返回 job_id
 
     stride: 每 N 帧检测一次（>1 时中间帧复用上次结果，可提速）
+    classes: 仅对 World 模型生效
     """
     _ensure_dirs()
     job_id = uuid.uuid4().hex[:12]
@@ -159,18 +224,25 @@ def start_video_job(
     }
     threading.Thread(
         target=_run_video_job,
-        args=(job_id, src, weights, conf, stride),
+        args=(job_id, src, weights, conf, stride, classes),
         daemon=True,
     ).start()
     return job_id
 
 
-def _run_video_job(job_id: str, src: Path, weights: str, conf: float, stride: int) -> None:
+def _run_video_job(
+    job_id: str,
+    src: Path,
+    weights: str,
+    conf: float,
+    stride: int,
+    classes: list[str] | None = None,
+) -> None:
     job = JOBS[job_id]
     try:
         import cv2
 
-        model = get_model(weights)
+        model = get_model(weights, classes=classes)
         cap = cv2.VideoCapture(str(src))
         if not cap.isOpened():
             raise RuntimeError("无法打开视频文件")

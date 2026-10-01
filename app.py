@@ -87,14 +87,38 @@ def _safe_file(directory: Path, filename: str) -> Path:
     return path
 
 
+def _parse_classes(classes: str | None) -> list[str] | None:
+    """把 "person, car, 书本" 解析成类别列表（中英文逗号都支持），空则返回 None"""
+    if not classes:
+        return None
+    items = [c.strip() for c in classes.replace("，", ",").split(",")]
+    items = [c for c in items if c]
+    return items or None
+
+
+def _clamp_conf(conf: float) -> float:
+    """置信度钳制到 (0, 1)：ultralytics 对越界值会直接抛 ValueError（如 conf=111）"""
+    return max(0.01, min(conf, 0.99))
+
+
 # ---------- YOLO 状态 ----------
 @app.get("/api/yolo/status", summary="YOLO 环境状态")
 def yolo_status() -> dict:
     available, message = vision.yolo_available()
-    models = []
+    models: list[str] = []
+    world_models: list[str] = []
     if MODELS_DIR.is_dir():
-        models = [p.name for p in sorted(MODELS_DIR.glob("*.pt"))]
-    return {"available": available, "message": message, "models": models}
+        for p in sorted(MODELS_DIR.glob("*.pt")):
+            models.append(p.name)
+            if vision.is_world_weights(p.name):
+                world_models.append(p.name)
+    return {
+        "available": available,
+        "message": message,
+        "models": models,
+        "world_models": world_models,           # 属于 YOLO-World 的权重
+        "clip_available": vision.clip_available(),  # World 所需的文本编码器依赖
+    }
 
 
 # ---------- 上传 ----------
@@ -180,18 +204,34 @@ def get_model_file(run: str, filename: str) -> FileResponse:
 # ---------- 检测 ----------
 @app.post("/api/detect/image/{filename}", summary="检测图片")
 def detect_image(
-    filename: str, conf: float = 0.25, weights: str = vision.DEFAULT_WEIGHTS
+    filename: str,
+    conf: float = 0.25,
+    weights: str = vision.DEFAULT_WEIGHTS,
+    classes: str | None = None,
 ) -> dict:
     available, message = vision.yolo_available()
     if not available:
         raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
 
+    ok, reason = vision.world_ready(weights)
+    if not ok:
+        raise HTTPException(status_code=503, detail=reason)
+
+    conf = _clamp_conf(conf)
+    class_list = _parse_classes(classes)
+
     src = _safe_file(UPLOAD_DIR, filename)
-    logger.info("开始检测图片：%s（conf=%s, weights=%s）", filename, conf, weights)
+    logger.info(
+        "开始检测图片：%s（conf=%s, weights=%s, classes=%s）",
+        filename,
+        conf,
+        weights,
+        class_list,
+    )
     t0 = time.perf_counter()
 
     try:
-        result = vision.detect_image(src, weights=weights, conf=conf)
+        result = vision.detect_image(src, weights=weights, conf=conf, classes=class_list)
     except Exception as e:  # noqa: BLE001
         logger.exception("检测图片失败：%s", filename)
         raise HTTPException(
@@ -199,7 +239,13 @@ def detect_image(
         ) from e
 
     elapsed = time.perf_counter() - t0
-    logger.info("检测完成：%s 检出 %s 个目标，耗时 %.2fs", filename, result.get("count"), elapsed)
+    logger.info(
+        "检测完成：%s 模式=%s 检出 %s 个目标，耗时 %.2fs",
+        filename,
+        result.get("mode"),
+        result.get("count"),
+        elapsed,
+    )
     result["elapsed_seconds"] = round(elapsed, 3)
     return result
 
@@ -210,23 +256,40 @@ def detect_video(
     conf: float = 0.25,
     stride: int = 1,
     weights: str = vision.DEFAULT_WEIGHTS,
+    classes: str | None = None,
 ) -> dict:
     available, message = vision.yolo_available()
     if not available:
         raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
 
+    ok, reason = vision.world_ready(weights)
+    if not ok:
+        raise HTTPException(status_code=503, detail=reason)
+
     src = _safe_file(VIDEO_DIR, filename)
     stride = max(1, min(stride, 30))
+    conf = _clamp_conf(conf)
+    class_list = _parse_classes(classes)
 
     try:
-        job_id = vision.start_video_job(src, weights=weights, conf=conf, stride=stride)
+        job_id = vision.start_video_job(
+            src, weights=weights, conf=conf, stride=stride, classes=class_list
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("提交视频检测任务失败：%s", filename)
         raise HTTPException(
             status_code=500, detail=f"提交失败（{type(e).__name__}）：{e}"
         ) from e
 
-    logger.info("已提交视频检测任务：%s（job=%s, conf=%s, stride=%s）", filename, job_id, conf, stride)
+    logger.info(
+        "已提交视频检测任务：%s（job=%s, weights=%s, conf=%s, stride=%s, classes=%s）",
+        filename,
+        job_id,
+        weights,
+        conf,
+        stride,
+        class_list,
+    )
     return {"job_id": job_id}
 
 
