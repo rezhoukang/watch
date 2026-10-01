@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Env & config
+.env
+.env.*
+!.env.example
+
+# Logs & db
+*.log
+*.sqlite3
+*.db
+
+# 文件存储数据
+/data/
+
+# 模型权重
+/models/
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db

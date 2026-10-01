@@ -1,0 +1,12 @@
+# 注意：本 venv 用 --system-site-packages 创建
+#   python -m venv --system-site-packages .venv
+# torch / torchvision 复用系统 Python 中已装的版本（本机为 2.11.0+cu128），
+# 因此这里不需要再装 torch，避免重复占用 ~4GB。
+
+# YOLOv8 检测 / 训练
+ultralytics>=8.3
+
+# Web 服务
+fastapi>=0.115
+uvicorn>=0.32
+python-multipart>=0.0.9
