@@ -201,9 +201,14 @@ def detect_image(
     r = results[0]
 
     # 保存带框结果图
+    # cv2.imwrite 在 Windows 下遇到中文路径会静默失败（内部用窄字符 fopen），
+    # 所以走 imencode + tofile 写字节，保证「东教室阶梯.png」这类文件名也能存。
     out_name = f"{src.stem}_det{src.suffix}"
     out_path = RESULTS_DIR / out_name
-    cv2.imwrite(str(out_path), r.plot())
+    ok, buf = cv2.imencode(out_path.suffix, r.plot())
+    if not ok:
+        raise RuntimeError(f"结果图编码失败：{out_name}")
+    buf.tofile(str(out_path))
 
     names = r.names
     orig_h, orig_w = r.orig_shape
