@@ -16,7 +16,7 @@ OUTPUT_DIR = BASE_DIR / "data" / "outputs"   # 检测结果视频
 DATASETS_DIR = BASE_DIR / "data" / "datasets"  # 训练数据集
 RUNS_DIR = BASE_DIR / "data" / "runs"        # 训练输出
 
-DEFAULT_WEIGHTS = "yolov8m-worldv2.pt"
+DEFAULT_WEIGHTS = "yolov8s-worldv2.pt"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"}
 
@@ -172,21 +172,32 @@ def clear_model_cache() -> int:
 
 
 # ---------- 图片检测 ----------
+def _clamp_imgsz(imgsz: int) -> int:
+    """推理尺寸钳制到 320~1920，并对齐 32 的倍数（YOLO 下采样步长）"""
+    v = max(320, min(int(imgsz), 1920))
+    return int(round(v / 32) * 32)
+
+
 def detect_image(
     src: Path,
     weights: str = DEFAULT_WEIGHTS,
     conf: float = 0.25,
     classes: list[str] | None = None,
+    imgsz: int = 640,
 ) -> dict:
     """检测单张图片，保存带框结果，返回检测详情
 
     classes: 仅对 World 模型生效；为空则使用权重内置类别
+    imgsz:   推理分辨率（会钳制到 320~1920 并对齐 32 的倍数）
     """
     _ensure_dirs()
     import cv2
 
+    size = _clamp_imgsz(imgsz)
     model = get_model(weights, classes=classes)
-    results = model.predict(source=str(src), conf=conf, device=device_arg(), verbose=False)
+    results = model.predict(
+        source=str(src), conf=conf, imgsz=size, device=device_arg(), verbose=False
+    )
     r = results[0]
 
     # 保存带框结果图
@@ -234,6 +245,7 @@ def detect_image(
         "result_url": f"/results/{out_name}",
         "image_width": int(orig_w),
         "image_height": int(orig_h),
+        "imgsz": size,
         "count": len(detections),
         "summary": summary,
         "detections": detections,

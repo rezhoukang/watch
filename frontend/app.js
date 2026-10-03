@@ -126,7 +126,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
 /* ==================== 环境状态 / 模型模式（普通 YOLO ↔ YOLO-World）==================== */
 
 let WORLD_MODELS = [];   // 属于 YOLO-World 的权重文件名（由后端告知）
-let DEFAULT_MODEL = 'yolov8m-worldv2.pt';   // 下拉框默认选中（后端 status 覆盖）
+let DEFAULT_MODEL = 'yolov8s-worldv2.pt';   // 下拉框默认选中（后端 status 覆盖）
 
 /** 填充下拉框，并尽量保留原选择；无选择时用 preferred（默认模型） */
 function fillSelect(id, names, preferred = '') {
@@ -248,8 +248,8 @@ function bindDropZone(zoneId, inputId, btnId, statusId, kind, uploadPath, onDone
         const fd = new FormData();
         fd.append('file', f);
         try {
-          await api(uploadPath, { method: 'POST', body: fd }, 120000);
-          ok.push(f.name);
+          const d = await api(uploadPath, { method: 'POST', body: fd }, 120000);
+          ok.push(d && d.overwritten ? `${f.name}（已覆盖同名文件）` : f.name);
         } catch (e) {
           fail.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
         }
@@ -336,13 +336,16 @@ document.querySelectorAll('.subtab').forEach((t) => {
 
 let DET = null;   // 当前查看的检测结果
 
+/** 去重默认开关：勾选框与 DET.dedup 的初值都取它，避免「界面勾着但没生效」 */
+const DEDUP_DEFAULT = true;
+
 /** 类别 → 颜色：黄金角取色，区分度高且白字可读 */
 function classColor(i) {
   return `hsl(${Math.round((i * 137.508) % 360)}, 62%, 42%)`;
 }
 
 /** 渲染整个结果页（原图 + 前端叠加框 + 筛选条 + 明细表） */
-function renderDetectResult(r, filename, confUsed, elapsed) {
+function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
   const box = el('detectResult');
   const dets = Array.isArray(r.detections) ? r.detections : [];
 
@@ -362,6 +365,11 @@ function renderDetectResult(r, filename, confUsed, elapsed) {
     confMin: Number(confUsed) || 0.01,
     naturalW: 1,
     naturalH: 1,
+    // 去重（后处理，不重跑模型）
+    dedup: DEDUP_DEFAULT,
+    dedupDist: 20,              // 中心点距离 ≤ 这个像素数 → 视为同一目标
+    dedupNest: 0.8,             // 一个框被另一个覆盖 ≥ 这个比例 → 视为同一目标
+    dedupKeep: 'conf',          // 冲突时先留谁：'conf' 得分高 / 'big' 大框 / 'small' 小框
   };
 
   const modeLabel = r.mode === 'world' ? 'YOLO-World' : '普通 YOLO';
@@ -373,7 +381,7 @@ function renderDetectResult(r, filename, confUsed, elapsed) {
   box.innerHTML =
     `<div class="result-head">${esc(filename)}` +
       `<span class="meta">${esc(modeLabel)}｜${esc(r.model || '')}｜${esc(clsNote)}｜` +
-      `检测阈值 ${esc(confUsed)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
+      `检测阈值 ${esc(confUsed)}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
     `<div class="viewer-bar">` +
       `<div class="seg" id="detShape">` +
         `<button class="seg-btn active" data-shape="box">框</button>` +
@@ -383,6 +391,16 @@ function renderDetectResult(r, filename, confUsed, elapsed) {
       `<b id="detMinConfVal">${esc(confUsed)}</b></label>` +
       `<label><input type="checkbox" id="detAlwaysTag"> 常显标签</label>` +
       `<div class="chips" id="detChips"></div>` +
+    `</div>` +
+    `<div class="dedup-bar">` +
+      `<label><input type="checkbox" id="dedupOn"${DEDUP_DEFAULT ? ' checked' : ''}> 去重</label>` +
+      `<label>中心距 ≤ <input type="number" id="dedupDist" value="20" min="0" max="500" step="1"> px</label>` +
+      `<label>内嵌率 ≥ <input type="number" id="dedupNest" value="80" min="0" max="100" step="5"> %</label>` +
+      `<label>重叠时保留 <select id="dedupKeep">` +
+        `<option value="conf">得分高</option>` +
+        `<option value="big">大框（外包）</option>` +
+        `<option value="small">小框（内嵌）</option>` +
+      `</select></label>` +
     `</div>` +
     `<div class="viewer" id="detViewer">` +
       `<img class="base" id="detBaseImg" src="/images/${encodeURIComponent(filename)}" alt="检测图">` +
@@ -405,7 +423,7 @@ function renderDetectResult(r, filename, confUsed, elapsed) {
       b.className = 'chip';
       b.dataset.name = name;
       b.style.background = colorOf.get(name);
-      b.textContent = `${name} ${counts.get(name)}`;
+      b.textContent = `${name} ${counts.get(name)}`;   // 初值；paintDetects 会按实际显示数刷新
       b.title = '单击：显示 / 隐藏这一类｜双击：只看这一类';
       b.addEventListener('click', () => {
         if (DET.hidden.has(name)) DET.hidden.delete(name);
@@ -466,6 +484,18 @@ function renderDetectResult(r, filename, confUsed, elapsed) {
     el('detViewer').classList.toggle('always-tags', e.target.checked);
   });
 
+  // 去重：纯前端后处理，参数随时可调
+  const applyDedup = () => {
+    DET.dedup = el('dedupOn').checked;
+    DET.dedupDist = Number(el('dedupDist').value) || 0;
+    DET.dedupNest = (Number(el('dedupNest').value) || 0) / 100;
+    DET.dedupKeep = el('dedupKeep').value;
+    paintDetects();
+  };
+  el('dedupOn').addEventListener('change', applyDedup);
+  el('dedupKeep').addEventListener('change', applyDedup);
+  ['dedupDist', 'dedupNest'].forEach((id) => el(id).addEventListener('input', applyDedup));
+
   // 图片就绪后再画框（需要原图宽高把 bbox 换算成百分比）
   const img = el('detBaseImg');
   const onReady = () => {
@@ -513,6 +543,67 @@ function makeDetTag(d) {
   return tag;
 }
 
+/** 框面积（原图像素） */
+function detArea(d) {
+  const [x1, y1, x2, y2] = d.bbox;
+  return Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+}
+
+/** 两框中心点的像素距离 */
+function centerDist(a, b) {
+  const [ax, ay] = detCenter(a);
+  const [bx, by] = detCenter(b);
+  return Math.hypot(ax - bx, ay - by);
+}
+
+/** a 被 b 覆盖的面积占 a 的比例（0~1），用来判断嵌套关系 */
+function coveredRatio(a, b) {
+  const [ax1, ay1, ax2, ay2] = a.bbox;
+  const [bx1, by1, bx2, by2] = b.bbox;
+  const iw = Math.max(0, Math.min(ax2, bx2) - Math.max(ax1, bx1));
+  const ih = Math.max(0, Math.min(ay2, by2) - Math.max(ay1, by1));
+  const area = (ax2 - ax1) * (ay2 - ay1);
+  return area > 0 ? (iw * ih) / area : 0;
+}
+
+/**
+ * 去重：只合并「同一类别」的框 —— 中心点太近、或一个框被另一个大半包住时，只留一个。
+ * 按 dedupKeep 决定先留谁（得分高 / 大框 / 小框），再贪心吃掉与它冲突的后继。
+ * 返回保留下来的原始下标（升序）。
+ */
+function dedupPick(list) {
+  const rank = {
+    conf: (d) => -d.confidence,
+    big: (d) => -detArea(d),
+    small: (d) => detArea(d),
+  }[DET.dedupKeep];
+
+  const sorted = [...list].sort((i, j) => rank(DET.dets[i]) - rank(DET.dets[j]));
+  const kept = [];
+
+  for (const i of sorted) {
+    const a = DET.dets[i];
+    let dup = false;
+    for (const k of kept) {
+      const b = DET.dets[k];
+      if (a.class_name !== b.class_name) continue;   // 跨类别不合并（人身上可以有手机）
+      if (DET.dedupDist > 0 && centerDist(a, b) <= DET.dedupDist) {
+        dup = true;
+        break;
+      }
+      if (
+        DET.dedupNest > 0 &&
+        (coveredRatio(a, b) >= DET.dedupNest || coveredRatio(b, a) >= DET.dedupNest)
+      ) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup) kept.push(i);
+  }
+  return kept.sort((x, y) => x - y);   // 还原原始顺序，保持框的层叠与表格一致
+}
+
 /** 给标注节点挂上 hover 高亮 / 点击定位事件 */
 function bindDetNode(node, i) {
   node.addEventListener('mouseenter', () => highlightDet(i, true));
@@ -536,7 +627,12 @@ function paintDetects() {
     show.push(i);
   });
 
-  show.forEach((i) => {
+  // 去重是最后一道：先按类别/置信度筛完，再合并重复目标
+  const before = show.length;
+  const shown = DET.dedup ? dedupPick(show) : show;
+  const merged = before - shown.length;
+
+  shown.forEach((i) => {
     const d = DET.dets[i];
     const [x1, y1, x2, y2] = d.bbox;
     // 类别色只写一次：CSS 里边框 / 圆点 / 标签底色都取 var(--c)
@@ -582,15 +678,31 @@ function paintDetects() {
     }
   });
 
-  const visible = new Set(show);
+  const visible = new Set(shown);
   el('detTableBody').querySelectorAll('tr').forEach((tr) => {
     tr.hidden = !visible.has(Number(tr.dataset.i));
   });
 
+  // 胶囊上的数字 = 图上实际显示的该类数量，跟下面那句"N 个框"对得上（受筛选/去重影响）
+  const shownCounts = new Map();
+  shown.forEach((i) => {
+    const name = DET.dets[i].class_name;
+    shownCounts.set(name, (shownCounts.get(name) || 0) + 1);
+  });
+  document.querySelectorAll('#detChips .chip').forEach((b) => {
+    const n = shownCounts.get(b.dataset.name) || 0;
+    b.textContent = `${b.dataset.name} ${n}`;
+    b.classList.toggle('zero', n === 0);
+  });
+
+  const notes = [];
+  if (merged > 0) notes.push(`去重合并 ${merged} 个`);
+  if (shown.length + merged < DET.dets.length) notes.push('部分被类别/置信度筛选隐藏');
+
   const unit = DET.shape === 'dot' ? '个点' : '个框';
   el('detCount').textContent =
-    `图上 ${show.length} ${unit} / 共检出 ${DET.dets.length} 个` +
-    (show.length < DET.dets.length ? '（部分被筛选条件隐藏）' : '');
+    `图上 ${shown.length} ${unit} / 共检出 ${DET.dets.length} 个` +
+    (notes.length ? `（${notes.join('；')}）` : '');
 }
 
 /** 标注 ↔ 明细表行 双向高亮；中心点模式下顺带浮现它对应的框 */
@@ -620,6 +732,25 @@ async function loadImages() {
       const fig = document.createElement('figure');
       fig.title = '点击检测：' + img.filename;
       fig.innerHTML = `<img src="${esc(img.url)}" alt=""><figcaption>${esc(img.filename)}</figcaption>`;
+
+      // 删除按钮（hover 时才露出，点它不会触发检测）
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'del-btn';
+      del.textContent = '×';
+      del.title = '删除这张图片';
+      del.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (!confirm(`删除图片「${img.filename}」？`)) return;
+        try {
+          await api(`/api/images/${encodeURIComponent(img.filename)}`, { method: 'DELETE' }, 15000);
+          await loadImages();
+        } catch (e) {
+          banner(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+        }
+      });
+      fig.appendChild(del);
+
       // 鼠标悬停时弹出大图（原图比例，不裁剪）
       fig.addEventListener('mouseenter', (ev) => showHoverPreview(img.url, img.filename, ev));
       fig.addEventListener('mousemove', (ev) => {
@@ -645,7 +776,8 @@ async function detectImage(filename) {
 
   try {
     // 1) 先取参数（元素缺失会被 catch 住并显示出来）
-    const conf = el('detConf').value || '0.05';
+    const conf = el('detConf').value || '0.01';
+    const imgsz = el('detImgsz').value || '640';
     const { weights, isWorld, classes } = readDetectOptions('det');
     const modeText = isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
@@ -660,7 +792,7 @@ async function detectImage(filename) {
       box.innerHTML =
         `<div>检测中… <b>${((Date.now() - t0) / 1000).toFixed(1)}s</b></div>` +
         `<div style="font-size:12px;color:#80868b;margin-top:6px">` +
-        `图片：${esc(filename)}｜置信度 ${esc(conf)}｜${esc(modeText)}<br>` +
+        `图片：${esc(filename)}｜置信度 ${esc(conf)}｜imgsz ${esc(imgsz)}｜${esc(modeText)}<br>` +
         `（第一次检测要加载模型；World 切换类别还要编码文字；超过 300 秒自动报超时）</div>`;
     };
     paint();
@@ -670,6 +802,7 @@ async function detectImage(filename) {
     const url =
       `/api/detect/image/${encodeURIComponent(filename)}` +
       `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}` +
+      `&imgsz=${encodeURIComponent(imgsz)}` +
       (classes ? `&classes=${encodeURIComponent(classes)}` : '');
     const r = await api(url, { method: 'POST' }, 300000);
 
@@ -677,7 +810,7 @@ async function detectImage(filename) {
     if (!r || !Array.isArray(r.detections)) {
       throw new Error(`后端返回数据不完整：${JSON.stringify(r).slice(0, 200)}`);
     }
-    renderDetectResult(r, filename, conf, (Date.now() - t0) / 1000);
+    renderDetectResult(r, filename, conf, (Date.now() - t0) / 1000, imgsz);
 
     // 刷新图库缩略图（失败不影响已显示的结果）
     try {
@@ -730,7 +863,7 @@ async function detectVideo(filename, btn) {
   const t0 = Date.now();
 
   try {
-    const conf = el('vidConf').value || '0.05';
+    const conf = el('vidConf').value || '0.01';
     const stride = el('vidStride').value || '1';
     const { weights, isWorld, classes } = readDetectOptions('vid');
     const modeText = isWorld

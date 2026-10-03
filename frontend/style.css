@@ -118,6 +118,7 @@ input[type="number"] { width: 88px; }
   padding: 4px;
 }
 .grid figure {
+  position: relative;
   background: #fff;
   border-radius: 8px;
   overflow: hidden;
@@ -133,6 +134,28 @@ input[type="number"] { width: 88px; }
   padding: 5px 6px;
   word-break: break-all;
 }
+/* 删除按钮：平时隐藏，鼠标移到缩略图上才露出 */
+.grid .del-btn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .55);
+  color: #fff;
+  font-size: 16px;
+  line-height: 1;
+  font-family: inherit;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.grid figure:hover .del-btn { display: flex; }
+.grid .del-btn:hover { background: #c5221f; }
 
 /* 列表 */
 .list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
@@ -223,6 +246,27 @@ input[type="number"] { width: 88px; }
   text-decoration: line-through;
   text-shadow: none;
 }
+/* 当前图上没有这类框（被置信度/去重筛掉）时淡化显示 */
+.chip.zero { opacity: .5; }
+
+/* 去重控制条 */
+.dedup-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: #fafbfc;
+  border: 1px solid #eceff1;
+  border-radius: 10px;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #5f6368;
+}
+.dedup-bar label { display: flex; align-items: center; gap: 5px; }
+.dedup-bar input[type="number"] { width: 66px; padding: 4px 6px; }
+.dedup-bar select { padding: 4px 6px; }
+.dedup-bar input[type="checkbox"] { accent-color: #1a73e8; }
 
 /* 图片 + 框叠加层（viewer 尺寸 = 图片显示尺寸，框用百分比定位） */
 .viewer { position: relative; display: inline-block; max-width: 100%; line-height: 0; }

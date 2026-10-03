@@ -9,10 +9,9 @@
 启动：python app.py
 """
 import logging
+import re
 import shutil
 import time
-import uuid
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -54,27 +53,51 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-def _unique_name(original: str, ext_set: set[str]) -> str:
-    """校验扩展名并生成唯一文件名"""
-    ext = Path(original or "").suffix.lower()
-    if ext not in ext_set:
+# Windows 文件名非法字符；同时挡掉路径分隔符，防目录穿越
+_ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+# Windows 保留设备名，不能直接当文件名
+_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _safe_name(original: str, ext_set: set[str]) -> str:
+    """沿用上传时的原文件名（只做安全清洗），扩展名必须在白名单内"""
+    name = Path(original or "").name.strip()      # 去掉任何路径部分
+    suffix = Path(name).suffix
+    if suffix.lower() not in ext_set:
         raise HTTPException(
             status_code=400,
-            detail=f"不支持的文件格式 {ext or '(无扩展名)'}，仅支持：{', '.join(sorted(ext_set))}",
+            detail=(
+                f"不支持的文件格式 {suffix or '(无扩展名)'}，"
+                f"仅支持：{', '.join(sorted(ext_set))}"
+            ),
         )
-    return f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
+    stem = _ILLEGAL_CHARS.sub("_", Path(name).stem).strip(" .")  # 结尾不能是点/空格
+    if not stem:
+        raise HTTPException(status_code=400, detail=f"文件名不合法：{original}")
+    if stem.upper() in _RESERVED_NAMES:
+        stem = f"_{stem}"
+    return f"{stem}{suffix}"
 
 
-def _save_upload(file: UploadFile, directory: Path, ext_set: set[str]) -> str:
-    filename = _unique_name(file.filename or "", ext_set)
+def _save_upload(file: UploadFile, directory: Path, ext_set: set[str]) -> tuple[str, bool]:
+    """按原文件名保存（同名直接覆盖）。返回 (文件名, 是否覆盖了已有文件)"""
+    filename = _safe_name(file.filename or "", ext_set)
     directory.mkdir(parents=True, exist_ok=True)
     dest = directory / filename
+    overwritten = dest.exists()
     try:
         with dest.open("wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"保存文件失败: {e}")
-    return filename
+    return filename, overwritten
 
 
 def _safe_file(directory: Path, filename: str) -> Path:
@@ -125,14 +148,28 @@ def yolo_status() -> dict:
 # ---------- 上传 ----------
 @app.post("/api/upload", summary="上传图片")
 async def upload_image(file: UploadFile = File(...)) -> dict:
-    filename = _save_upload(file, UPLOAD_DIR, IMAGE_EXTENSIONS)
-    return {"filename": filename, "url": f"/images/{filename}"}
+    filename, overwritten = _save_upload(file, UPLOAD_DIR, IMAGE_EXTENSIONS)
+    logger.info("上传图片：%s%s", filename, "（覆盖同名文件）" if overwritten else "")
+    return {"filename": filename, "url": f"/images/{filename}", "overwritten": overwritten}
 
 
 @app.post("/api/upload_video", summary="上传视频")
 async def upload_video(file: UploadFile = File(...)) -> dict:
-    filename = _save_upload(file, VIDEO_DIR, VIDEO_EXTENSIONS)
-    return {"filename": filename, "url": f"/videos/{filename}"}
+    filename, overwritten = _save_upload(file, VIDEO_DIR, VIDEO_EXTENSIONS)
+    logger.info("上传视频：%s%s", filename, "（覆盖同名文件）" if overwritten else "")
+    return {"filename": filename, "url": f"/videos/{filename}", "overwritten": overwritten}
+
+
+@app.delete("/api/images/{filename}", summary="删除图片")
+def delete_image(filename: str) -> dict:
+    """删除待测图片（已生成的检测结果图不动）"""
+    path = _safe_file(UPLOAD_DIR, filename)
+    try:
+        path.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
+    logger.info("已删除图片：%s", filename)
+    return {"ok": True, "filename": filename}
 
 
 # ---------- 列表 ----------
@@ -209,6 +246,7 @@ def detect_image(
     conf: float = 0.25,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
+    imgsz: int = 640,
 ) -> dict:
     available, message = vision.yolo_available()
     if not available:
@@ -223,16 +261,19 @@ def detect_image(
 
     src = _safe_file(UPLOAD_DIR, filename)
     logger.info(
-        "开始检测图片：%s（conf=%s, weights=%s, classes=%s）",
+        "开始检测图片：%s（conf=%s, weights=%s, imgsz=%s, classes=%s）",
         filename,
         conf,
         weights,
+        imgsz,
         class_list,
     )
     t0 = time.perf_counter()
 
     try:
-        result = vision.detect_image(src, weights=weights, conf=conf, classes=class_list)
+        result = vision.detect_image(
+            src, weights=weights, conf=conf, classes=class_list, imgsz=imgsz
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception("检测图片失败：%s", filename)
         raise HTTPException(
