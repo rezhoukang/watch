@@ -53,6 +53,22 @@ body {
 }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 
+/* 检测结果库（data/outputs/） */
+.outlib {
+  margin-top: 24px;
+  background: #fff;
+  border-radius: 10px;
+  padding: 16px;
+}
+.outlib h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  color: #3c4043;
+  margin-bottom: 10px;
+}
+
 /* 拖拽区 */
 .drop {
   border: 2px dashed #c8ccd4;
@@ -164,6 +180,7 @@ input[type="number"] { width: 88px; }
   justify-content: space-between;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;   /* 允许时间轴展开区换行到下一行 */
   background: #fff;
   border-radius: 8px;
   padding: 10px 14px;
@@ -171,6 +188,83 @@ input[type="number"] { width: 88px; }
 }
 .list .item .name { word-break: break-all; }
 .list .item .meta { color: #80868b; font-size: 12px; }
+/* 视频列表项：右侧操作按钮组 */
+.item-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* 视频时间轴展开区：独占整行（flex-basis:100% 强制换行） */
+.range-box {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  background: #f8f9fa;
+  border: 1px dashed #dadce0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #5f6368;
+  margin-top: 2px;
+}
+.range-box .r-hint { color: #80868b; }
+/* 双滑块时间轴：两个 range 叠加，背景渐变高亮选中区间 */
+.range-box .r-label {
+  min-width: 46px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: #3c4043;
+  font-weight: 600;
+}
+.dual-range {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 180px;
+  height: 24px;
+  background: linear-gradient(to right, #e8eaed, #e8eaed);
+  border-radius: 3px;
+}
+.dual-range input[type="range"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  pointer-events: none;   /* 只让拇指可拖，轨道点击不跳变 */
+  outline: none;
+}
+.dual-range input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px;
+  background: transparent;
+}
+.dual-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -5px;   /* (thumb高16 - 轨道高6) / 2，让拇指居中对齐轨道 */
+  border-radius: 50%;
+  background: #1a73e8;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.dual-range input[type="range"]::-moz-range-track { background: transparent; }
+.dual-range input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #1a73e8;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  pointer-events: auto;
+  cursor: pointer;
+}
 .empty { color: #9aa0a6; font-size: 13px; text-align: center; padding: 18px 0; }
 
 /* 结果区 */
@@ -457,6 +551,13 @@ input[type="number"] { width: 88px; }
 .subpanel.active { display: block; }
 .btn.ghost { background: #f1f3f4; color: #3c4043; }
 .btn.ghost:hover { background: #e4e6eb; }
+/* 危险操作（删除）按钮 */
+.btn.danger {
+  background: #fff;
+  color: #c5221f;
+  border: 1px solid #f2c6c2;
+}
+.btn.danger:hover { background: #fce8e6; }
 
 /* 缩略图悬浮大图预览 */
 .hover-preview {

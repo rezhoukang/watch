@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=16">
+<link rel="stylesheet" href="/style.css?v=20">
 </head>
 <body>
 <div class="app">
@@ -76,6 +76,10 @@
     <div class="toolbar">
       <label>置信度 <input type="number" id="vidConf" value="0.01" min="0.01" max="0.99" step="0.05"></label>
       <label>抽帧间隔 <input type="number" id="vidStride" value="1" min="1" max="30" step="1"></label>
+      <label>显示形式 <select id="vidRender">
+        <option value="box">框</option>
+        <option value="dot">中心点</option>
+      </select></label>
       <label>模型 <select id="vidWeights"></select></label>
       <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" value="person" placeholder="person, car" size="20"></label>
       <button class="btn small" id="refreshVideos">刷新列表</button>
@@ -89,6 +93,10 @@
         <h2>检测结果</h2>
         <div id="videoResult" class="result-box">点击左侧视频开始检测</div>
       </div>
+    </div>
+    <div class="outlib">
+      <h2>检测结果库（data/outputs/）<button class="btn small ghost" id="refreshOutputs">刷新</button></h2>
+      <div id="outputList" class="list"></div>
     </div>
   </section>
 
@@ -132,6 +140,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=20"></script>
+<script src="/app.js?v=24"></script>
 </body>
 </html>

@@ -211,6 +211,28 @@ def list_videos() -> dict:
     }
 
 
+@app.get("/api/videos/{filename}/info", summary="视频元信息（时长/分辨率/帧率）")
+def video_info(filename: str) -> dict:
+    """给前端时间轴用的：总时长（秒）、宽高、帧率、总帧数"""
+    path = _safe_file(VIDEO_DIR, filename)
+    info = vision.video_info(path)
+    if info is None:
+        raise HTTPException(status_code=400, detail="无法读取视频信息（文件损坏或格式不支持）")
+    return info
+
+
+@app.delete("/api/videos/{filename}", summary="删除视频")
+def delete_video(filename: str) -> dict:
+    """删除上传的视频（不删已生成的检测输出）"""
+    path = _safe_file(VIDEO_DIR, filename)
+    try:
+        path.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
+    logger.info("已删除视频：%s", filename)
+    return {"ok": True, "filename": filename}
+
+
 # ---------- 文件访问 ----------
 @app.get("/images/{filename}", summary="访问图片")
 def get_image(filename: str) -> FileResponse:
@@ -299,6 +321,10 @@ def detect_video(
     stride: int = 1,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
+    start: float = 0.0,
+    end: float | None = None,
+    render: str = "box",
+    line_width: int = 2,
 ) -> dict:
     available, message = vision.yolo_available()
     if not available:
@@ -313,9 +339,27 @@ def detect_video(
     conf = _clamp_conf(conf)
     class_list = _parse_classes(classes)
 
+    # 显示形式：'box' 框 / 'dot' 中心点；line_width 钳到 1~8
+    if render not in ("box", "dot"):
+        raise HTTPException(status_code=400, detail="render 只能是 box 或 dot")
+    line_width = max(1, min(line_width, 8))
+
+    # 时间范围校验：end 缺省 = 全片；必须 start < end
+    start = max(0.0, start)
+    if end is not None and end <= start:
+        raise HTTPException(status_code=400, detail="时间范围无效：end 必须大于 start")
+
     try:
         job_id = vision.start_video_job(
-            src, weights=weights, conf=conf, stride=stride, classes=class_list
+            src,
+            weights=weights,
+            conf=conf,
+            stride=stride,
+            classes=class_list,
+            start=start,
+            end=end,
+            render=render,
+            line_width=line_width,
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("提交视频检测任务失败：%s", filename)
@@ -324,13 +368,18 @@ def detect_video(
         ) from e
 
     logger.info(
-        "已提交视频检测任务：%s（job=%s, weights=%s, conf=%s, stride=%s, classes=%s）",
+        "已提交视频检测任务：%s（job=%s, weights=%s, conf=%s, stride=%s, classes=%s, "
+        "range=%s~%ss, render=%s, lw=%s）",
         filename,
         job_id,
         weights,
         conf,
         stride,
         class_list,
+        start,
+        end,
+        render,
+        line_width,
     )
     return {"job_id": job_id}
 
@@ -377,6 +426,30 @@ def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+@app.post("/api/jobs/{job_id}/cancel", summary="取消任务")
+def cancel_job(job_id: str) -> dict:
+    """取消运行中的视频检测 / 训练任务（后台线程会在下一帧/下一轮停下）"""
+    if job_id not in vision.JOBS:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    ok = vision.cancel_job(job_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail="任务已结束，无法取消")
+    logger.info("已请求取消任务：%s", job_id)
+    return {"ok": True, "job_id": job_id}
+
+
+@app.delete("/api/outputs/{filename}", summary="删除检测结果视频")
+def delete_output(filename: str) -> dict:
+    """删除 data/outputs/ 里的检测结果视频"""
+    path = _safe_file(OUTPUT_DIR, filename)
+    try:
+        path.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
+    logger.info("已删除检测结果：%s", filename)
+    return {"ok": True, "filename": filename}
 
 
 # ---------- 静态页面（http://127.0.0.1:8000）----------
