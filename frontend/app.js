@@ -136,9 +136,9 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
     if (name === 'detect') loadImages();
     if (name === 'video') loadVideos();
-    if (name === 'train') {
-      loadDatasets().then(loadAnnotateGrid);
-    }
+    // 训练页只要数据集下拉框；数据集管理页还要标注缩略图
+    if (name === 'train') loadDatasets();
+    if (name === 'dataset') loadDatasets().then(loadAnnotateGrid);
   });
 });
 
@@ -185,8 +185,8 @@ async function loadEnv() {
     DEFAULT_MODEL = s.default_model || DEFAULT_MODEL;
 
     const all = s.models.length ? s.models : [DEFAULT_MODEL];
-    fillSelect('detWeights', all, DEFAULT_MODEL);   // 图片检测：全部模型
-    fillSelect('vidWeights', all, DEFAULT_MODEL);   // 视频检测：全部模型
+    fillSelect('detWeights', all, DEFAULT_MODEL);   // 图片推理：全部模型
+    fillSelect('vidWeights', all, DEFAULT_MODEL);   // 视频推理：全部模型
     fillSelect('trainWeights', all, DEFAULT_MODEL); // 训练：全部模型（含 World，迁移起点与推理一致）
     fillSelect('annWeights', all, DEFAULT_MODEL);   // 标注器：全部模型（与推理一致）
 
@@ -210,7 +210,7 @@ el('annWeights').addEventListener('change', () =>
   syncModeUi('annWeights', 'annClassesWrap')
 );
 
-/** 读取当前检测设置（图片/视频共用） */
+/** 读取当前推理设置（图片/视频共用） */
 function readDetectOptions(prefix) {
   const weights = el(`${prefix}Weights`).value || DEFAULT_MODEL;
   const isWorld = WORLD_MODELS.includes(weights);
@@ -336,7 +336,7 @@ el('hoverPreview').querySelector('img').addEventListener('load', () => {
   if (hoverEv) placeHoverPreview(hoverEv);
 });
 
-/* ==================== 图片检测：图库 / 结果 两个子页面 ==================== */
+/* ==================== 图片推理：图库 / 结果 两个子页面 ==================== */
 
 const SUBTAB_PANES = { images: 'detect-pane-images', result: 'detect-pane-result' };
 
@@ -357,9 +357,9 @@ document.querySelectorAll('.subtab').forEach((t) => {
   t.addEventListener('click', () => switchSubPane(t.dataset.sub || 'images'));
 });
 
-/* ==================== 检测结果查看器（框由前端渲染）==================== */
+/* ==================== 推理结果查看器（框由前端渲染）==================== */
 
-let DET = null;   // 当前查看的检测结果
+let DET = null;   // 当前查看的推理结果
 
 /** 去重默认开关：勾选框与 DET.dedup 的初值都取它，避免「界面勾着但没生效」 */
 const DEDUP_DEFAULT = true;
@@ -411,7 +411,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
   box.innerHTML =
     `<div class="result-head">${esc(filename)}` +
       `<span class="meta">${esc(modeLabel)}｜${esc(r.model || '')}｜${esc(clsNote)}｜` +
-      `检测阈值 ${esc(confUsed)}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
+      `推理阈值 ${esc(confUsed)}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
     `<div class="viewer-bar">` +
       `<div class="seg" id="detShape">` +
         `<button class="seg-btn active" data-shape="box">框</button>` +
@@ -433,7 +433,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
       `</select></label>` +
     `</div>` +
     `<div class="viewer" id="detViewer">` +
-      `<img class="base" id="detBaseImg" src="/images/${encodeURIComponent(filename)}" alt="检测图">` +
+      `<img class="base" id="detBaseImg" src="/images/${encodeURIComponent(filename)}" alt="推理图">` +
       `<div class="boxes" id="detBoxes"></div>` +
     `</div>` +
     `<div class="viewer-foot">` +
@@ -472,7 +472,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
       chips.appendChild(b);
     });
   } else {
-    chips.innerHTML = '<span class="empty-inline">未检出任何目标（可调低检测阈值重跑）</span>';
+    chips.innerHTML = '<span class="empty-inline">未检出任何目标（可调低推理阈值重跑）</span>';
   }
 
   // 明细表一次建好，靠 hidden 切换（不重建，避免闪烁）
@@ -747,7 +747,7 @@ function highlightDet(i, on) {
   if (tr) tr.classList.toggle('hl', on);
 }
 
-/* ==================== 图片检测 ==================== */
+/* ==================== 图片推理 ==================== */
 
 async function loadImages() {
   const box = el('imageGrid');
@@ -760,10 +760,10 @@ async function loadImages() {
     box.innerHTML = '';
     data.images.forEach((img) => {
       const fig = document.createElement('figure');
-      fig.title = '点击检测：' + img.filename;
+      fig.title = '点击推理：' + img.filename;
       fig.innerHTML = `<img src="${esc(img.url)}" alt=""><figcaption>${esc(img.filename)}</figcaption>`;
 
-      // 删除按钮（hover 时才露出，点它不会触发检测）
+      // 删除按钮（hover 时才露出，点它不会触发推理）
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'del-btn';
@@ -813,22 +813,22 @@ async function detectImage(filename) {
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : '普通 YOLO';
 
-    // 切到「检测结果」子页面，并显示当前图片名
+    // 切到「推理结果」子页面，并显示当前图片名
     switchSubPane('result');
     el('detResultName').textContent = filename;
 
     // 2) 实时计时，区分"在跑"和"卡死"
     const paint = () => {
       box.innerHTML =
-        `<div>检测中… <b>${((Date.now() - t0) / 1000).toFixed(1)}s</b></div>` +
+        `<div>推理中… <b>${((Date.now() - t0) / 1000).toFixed(1)}s</b></div>` +
         `<div style="font-size:12px;color:#80868b;margin-top:6px">` +
         `图片：${esc(filename)}｜置信度 ${esc(conf)}｜imgsz ${esc(imgsz)}｜${esc(modeText)}<br>` +
-        `（第一次检测要加载模型；World 切换类别还要编码文字；超过 300 秒自动报超时）</div>`;
+        `（第一次推理要加载模型；World 切换类别还要编码文字；超过 300 秒自动报超时）</div>`;
     };
     paint();
     ticker = setInterval(paint, 200);
 
-    // 3) 请求后端（图片检测允许长耗时）
+    // 3) 请求后端（图片推理允许长耗时）
     const url =
       `/api/detect/image/${encodeURIComponent(filename)}` +
       `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}` +
@@ -849,16 +849,16 @@ async function detectImage(filename) {
       console.warn('[loadImages] 刷新失败', e);
     }
   } catch (err) {
-    showError(box, err, '检测失败');
+    showError(box, err, '推理失败');
   } finally {
-    // 无论成功失败都停掉计时器，避免"一直检测中"
+    // 无论成功失败都停掉计时器，避免"一直推理中"
     if (ticker !== null) clearInterval(ticker);
   }
 }
 
 el('refreshImages').addEventListener('click', loadImages);
 
-/* ==================== 视频检测 ==================== */
+/* ==================== 视频推理 ==================== */
 
 async function loadVideos() {
   const box = el('videoList');
@@ -880,16 +880,16 @@ async function loadVideos() {
       const right = document.createElement('span');
       right.className = 'item-actions';
 
-      // 时间轴：展开后选择检测的时间段
+      // 时间轴：展开后选择推理的时间段
       const timeBtn = document.createElement('button');
       timeBtn.className = 'btn small ghost';
       timeBtn.textContent = '时间轴';
-      timeBtn.title = '只检测其中一段（如中间 10 分钟）';
+      timeBtn.title = '只推理其中一段（如中间 10 分钟）';
       timeBtn.addEventListener('click', () => toggleVideoRange(item, v.filename));
 
       const btn = document.createElement('button');
       btn.className = 'btn small';
-      btn.textContent = '检测';
+      btn.textContent = '推理';
       btn.addEventListener('click', () => detectVideo(v.filename, btn));
 
       // 删除按钮
@@ -1022,7 +1022,7 @@ async function detectVideo(filename, btn) {
   let ticker = null;
   const t0 = Date.now();
 
-  // 找到对应的列表项（检测按钮的父级 .item），读它自己的时间段
+  // 找到对应的列表项（推理按钮的父级 .item），读它自己的时间段
   const item = btn.closest('.item');
 
   try {
@@ -1074,7 +1074,7 @@ async function detectVideo(filename, btn) {
         btn.disabled = false;
         if (job.status === 'cancelled') {
           box.innerHTML =
-            `<div style="color:#f9a825;font-weight:600">已取消检测任务。</div>`;
+            `<div style="color:#f9a825;font-weight:600">已取消推理任务。</div>`;
         } else if (job.result_url) {
           box.innerHTML =
             `<video src="${esc(job.result_url)}" controls></video>` +
@@ -1082,7 +1082,7 @@ async function detectVideo(filename, btn) {
             `<a class="btn small" href="${esc(job.result_url)}" download>导出视频</a>`;
         } else {
           box.innerHTML =
-            `<div style="color:#c5221f;font-weight:600">视频检测未成功：${esc(job.message)}</div>`;
+            `<div style="color:#c5221f;font-weight:600">视频推理未成功：${esc(job.message)}</div>`;
         }
         loadVideos();
         loadOutputs();
@@ -1091,7 +1091,7 @@ async function detectVideo(filename, btn) {
     );
   } catch (err) {
     btn.disabled = false;
-    showError(box, err, '视频检测失败');
+    showError(box, err, '视频推理失败');
   } finally {
     if (ticker !== null) clearInterval(ticker);
   }
@@ -1099,14 +1099,14 @@ async function detectVideo(filename, btn) {
 
 el('refreshVideos').addEventListener('click', loadVideos);
 
-/* ==================== 检测结果库（data/outputs/）==================== */
+/* ==================== 推理结果库（data/outputs/）==================== */
 async function loadOutputs() {
   const box = el('outputList');
   try {
     const data = await api('/api/videos');
     const outs = data.outputs || [];
     if (!outs.length) {
-      box.innerHTML = '<div class="empty">暂无检测结果视频</div>';
+      box.innerHTML = '<div class="empty">暂无推理结果视频</div>';
       return;
     }
     box.innerHTML = '';
@@ -1143,7 +1143,7 @@ async function loadOutputs() {
       del.className = 'btn small danger';
       del.textContent = '删除';
       del.addEventListener('click', async () => {
-        if (!confirm(`删除检测结果「${o.filename}」？`)) return;
+        if (!confirm(`删除推理结果「${o.filename}」？`)) return;
         try {
           await api(`/api/outputs/${encodeURIComponent(o.filename)}`, { method: 'DELETE' }, 15000);
           await loadOutputs();
@@ -1494,7 +1494,7 @@ async function saveClasses(names, okMsg) {
   }
 }
 
-/** 类别 → 调色用的下标（与检测结果页同一套黄金角取色） */
+/** 类别 → 调色用的下标（与推理结果页同一套黄金角取色） */
 function annClassIndex(clsId, name) {
   let idx = clsId;
   if (typeof idx !== 'number' || idx < 0) {
@@ -1776,7 +1776,7 @@ el('annShowLabels').addEventListener('change', (ev) => {
   el('annBoxes').classList.toggle('no-labels', !ANN.showLabels);
 });
 
-/** 预标注：调后端检测，把结果直接变成标注框 */
+/** 预标注：调后端推理，把结果直接变成标注框 */
 el('annPrelabel').addEventListener('click', async () => {
   if (!ANN) return;
   const btn = el('annPrelabel');

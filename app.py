@@ -2,7 +2,7 @@
 
 功能：
   - 图片 / 视频上传保存到 data/
-  - YOLOv8 图片检测、视频检测（后台任务）
+  - YOLOv8 图片推理、视频推理（后台任务）
   - YOLOv8 模型训练（后台任务）
   - 静态页面（frontend/index.html）映射到 /
 
@@ -162,7 +162,7 @@ async def upload_video(file: UploadFile = File(...)) -> dict:
 
 @app.delete("/api/images/{filename}", summary="删除图片")
 def delete_image(filename: str) -> dict:
-    """删除待测图片（已生成的检测结果图不动）"""
+    """删除待测图片（已生成的推理结果图不动）"""
     path = _safe_file(UPLOAD_DIR, filename)
     try:
         path.unlink()
@@ -223,7 +223,7 @@ def video_info(filename: str) -> dict:
 
 @app.delete("/api/videos/{filename}", summary="删除视频")
 def delete_video(filename: str) -> dict:
-    """删除上传的视频（不删已生成的检测输出）"""
+    """删除上传的视频（不删已生成的推理输出）"""
     path = _safe_file(VIDEO_DIR, filename)
     try:
         path.unlink()
@@ -239,7 +239,7 @@ def get_image(filename: str) -> FileResponse:
     return FileResponse(_safe_file(UPLOAD_DIR, filename))
 
 
-@app.get("/results/{filename}", summary="访问检测结果图")
+@app.get("/results/{filename}", summary="访问推理结果图")
 def get_result(filename: str) -> FileResponse:
     return FileResponse(_safe_file(RESULTS_DIR, filename))
 
@@ -249,7 +249,7 @@ def get_video(filename: str) -> FileResponse:
     return FileResponse(_safe_file(VIDEO_DIR, filename))
 
 
-@app.get("/outputs/{filename}", summary="访问检测结果视频")
+@app.get("/outputs/{filename}", summary="访问推理结果视频")
 def get_output(filename: str) -> FileResponse:
     return FileResponse(_safe_file(OUTPUT_DIR, filename))
 
@@ -261,8 +261,8 @@ def get_model_file(run: str, filename: str) -> FileResponse:
     return FileResponse(_safe_file(vision.RUNS_DIR / run / "weights", filename))
 
 
-# ---------- 检测 ----------
-@app.post("/api/detect/image/{filename}", summary="检测图片")
+# ---------- 推理 ----------
+@app.post("/api/detect/image/{filename}", summary="推理图片")
 def detect_image(
     filename: str,
     conf: float = 0.25,
@@ -283,7 +283,7 @@ def detect_image(
 
     src = _safe_file(UPLOAD_DIR, filename)
     logger.info(
-        "开始检测图片：%s（conf=%s, weights=%s, imgsz=%s, classes=%s）",
+        "开始推理图片：%s（conf=%s, weights=%s, imgsz=%s, classes=%s）",
         filename,
         conf,
         weights,
@@ -297,14 +297,14 @@ def detect_image(
             src, weights=weights, conf=conf, classes=class_list, imgsz=imgsz
         )
     except Exception as e:  # noqa: BLE001
-        logger.exception("检测图片失败：%s", filename)
+        logger.exception("推理图片失败：%s", filename)
         raise HTTPException(
-            status_code=500, detail=f"检测失败（{type(e).__name__}）：{e}"
+            status_code=500, detail=f"推理失败（{type(e).__name__}）：{e}"
         ) from e
 
     elapsed = time.perf_counter() - t0
     logger.info(
-        "检测完成：%s 模式=%s 检出 %s 个目标，耗时 %.2fs",
+        "推理完成：%s 模式=%s 检出 %s 个目标，耗时 %.2fs",
         filename,
         result.get("mode"),
         result.get("count"),
@@ -314,7 +314,7 @@ def detect_image(
     return result
 
 
-@app.post("/api/detect/video/{filename}", summary="检测视频（后台任务）")
+@app.post("/api/detect/video/{filename}", summary="推理视频（后台任务）")
 def detect_video(
     filename: str,
     conf: float = 0.25,
@@ -362,13 +362,13 @@ def detect_video(
             line_width=line_width,
         )
     except Exception as e:  # noqa: BLE001
-        logger.exception("提交视频检测任务失败：%s", filename)
+        logger.exception("提交视频推理任务失败：%s", filename)
         raise HTTPException(
             status_code=500, detail=f"提交失败（{type(e).__name__}）：{e}"
         ) from e
 
     logger.info(
-        "已提交视频检测任务：%s（job=%s, weights=%s, conf=%s, stride=%s, classes=%s, "
+        "已提交视频推理任务：%s（job=%s, weights=%s, conf=%s, stride=%s, classes=%s, "
         "range=%s~%ss, render=%s, lw=%s）",
         filename,
         job_id,
@@ -458,7 +458,7 @@ def prelabel_image(
     classes: str | None = None,
     imgsz: int = 640,
 ) -> dict:
-    """用与推理一致的权重选项对单张图片做检测，结果转成标注框返回。
+    """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。
     """
     img_path = vision.resolve_annotate_image(filename)
@@ -562,7 +562,7 @@ def get_job(job_id: str) -> dict:
 
 @app.post("/api/jobs/{job_id}/cancel", summary="取消任务")
 def cancel_job(job_id: str) -> dict:
-    """取消运行中的视频检测 / 训练任务（后台线程会在下一帧/下一轮停下）"""
+    """取消运行中的视频推理 / 训练任务（后台线程会在下一帧/下一轮停下）"""
     if job_id not in vision.JOBS:
         raise HTTPException(status_code=404, detail="任务不存在")
     ok = vision.cancel_job(job_id)
@@ -572,15 +572,15 @@ def cancel_job(job_id: str) -> dict:
     return {"ok": True, "job_id": job_id}
 
 
-@app.delete("/api/outputs/{filename}", summary="删除检测结果视频")
+@app.delete("/api/outputs/{filename}", summary="删除推理结果视频")
 def delete_output(filename: str) -> dict:
-    """删除 data/outputs/ 里的检测结果视频"""
+    """删除 data/outputs/ 里的推理结果视频"""
     path = _safe_file(OUTPUT_DIR, filename)
     try:
         path.unlink()
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
-    logger.info("已删除检测结果：%s", filename)
+    logger.info("已删除推理结果：%s", filename)
     return {"ok": True, "filename": filename}
 
 

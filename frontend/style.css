@@ -53,7 +53,14 @@ body {
 }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 
-/* 检测结果库（data/outputs/） */
+/* 数据集管理页：右侧缩略图列自适应（列变窄时自动减少每行数量）
+ * 用 .grid.annotate-grid 提高优先级：本规则写在 .grid 之前，
+ * 单写 .annotate-grid 与 .grid 同为 (0,1,0)，会被后面的 .grid 覆盖。 */
+.grid.annotate-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+}
+
+/* 推理结果库（data/outputs/） */
 .outlib {
   margin-top: 24px;
   background: #fff;
@@ -297,7 +304,7 @@ input[type="number"] { width: 88px; }
   margin-left: 8px;
 }
 
-/* ---- 检测结果查看器：框由前端渲染，可筛选 + 表格联动 ---- */
+/* ---- 推理结果查看器：框由前端渲染，可筛选 + 表格联动 ---- */
 .viewer-bar {
   display: flex;
   align-items: center;
@@ -604,9 +611,7 @@ input[type="number"] { width: 88px; }
   .row, .split { grid-template-columns: 1fr; }
 }
 
-/* ==================== 标注数据区（训练页）==================== */
-.annotate { margin-top: 22px; }
-.annotate h2 { display: flex; align-items: center; gap: 10px; }
+/* ==================== 数据集管理页（数据集 | 数据标注）==================== */
 .annotate-bar {
   display: flex;
   align-items: center;
@@ -621,8 +626,7 @@ input[type="number"] { width: 88px; }
 }
 .annotate-bar label { display: flex; align-items: center; gap: 6px; }
 .annotate-stat { color: #1a73e8; font-weight: 600; }
-.annotate-tip { margin-left: auto; font-size: 12px; color: #9aa0a6; }
-.annotate .grid figure { cursor: pointer; }
+.annotate-grid figure { cursor: pointer; }
 
 /* ==================== 全屏标注器 ==================== */
 .annotator-mask {

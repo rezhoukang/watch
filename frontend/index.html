@@ -4,20 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=26">
+<link rel="stylesheet" href="/style.css?v=28">
 </head>
 <body>
 <div class="app">
   <header class="topbar">
     <h1>本地视觉训练平台</h1>
-    <span id="envStatus" class="badge">检测中…</span>
+    <span id="envStatus" class="badge">检查中…</span>
   </header>
 
   <nav class="tabs">
     <button class="tab active" data-tab="upload">上传</button>
-    <button class="tab" data-tab="detect">图片检测</button>
-    <button class="tab" data-tab="video">视频检测</button>
+    <button class="tab" data-tab="detect">图片推理</button>
+    <button class="tab" data-tab="video">视频推理</button>
     <button class="tab" data-tab="train">训练</button>
+    <button class="tab" data-tab="dataset">数据集管理</button>
   </nav>
 
   <!-- ========== 上传 ========== -->
@@ -44,7 +45,7 @@
     </div>
   </section>
 
-  <!-- ========== 图片检测（图库 / 结果 两个子页面）========== -->
+  <!-- ========== 图片推理（图库 / 结果 两个子页面）========== -->
   <section class="panel" id="tab-detect">
     <div class="toolbar">
       <label>置信度 <input type="number" id="detConf" value="0.01" min="0.01" max="0.99" step="0.05"></label>
@@ -54,8 +55,8 @@
     </div>
 
     <nav class="subnav">
-      <button class="subtab active" data-sub="images">待检测图片</button>
-      <button class="subtab" data-sub="result">检测结果</button>
+      <button class="subtab active" data-sub="images">待推理图片</button>
+      <button class="subtab" data-sub="result">推理结果</button>
       <div class="subnav-right">
         <span class="subnav-status" id="detResultName"></span>
         <button class="btn small ghost" id="refreshImages">刷新列表</button>
@@ -67,11 +68,11 @@
     </div>
 
     <div class="subpanel" id="detect-pane-result">
-      <div id="detectResult" class="result-box">点击「待检测图片」里的图片开始检测</div>
+      <div id="detectResult" class="result-box">点击「待推理图片」里的图片开始推理</div>
     </div>
   </section>
 
-  <!-- ========== 视频检测 ========== -->
+  <!-- ========== 视频推理 ========== -->
   <section class="panel" id="tab-video">
     <div class="toolbar">
       <label>置信度 <input type="number" id="vidConf" value="0.01" min="0.01" max="0.99" step="0.05"></label>
@@ -90,27 +91,20 @@
         <div id="videoList" class="list"></div>
       </div>
       <div>
-        <h2>检测结果</h2>
-        <div id="videoResult" class="result-box">点击左侧视频开始检测</div>
+        <h2>推理结果</h2>
+        <div id="videoResult" class="result-box">点击左侧视频开始推理</div>
       </div>
     </div>
     <div class="outlib">
-      <h2>检测结果库（data/outputs/）<button class="btn small ghost" id="refreshOutputs">刷新</button></h2>
+      <h2>推理结果库（data/outputs/）<button class="btn small ghost" id="refreshOutputs">刷新</button></h2>
       <div id="outputList" class="list"></div>
     </div>
   </section>
 
-  <!-- ========== 训练 ========== -->
+  <!-- ========== 训练 / 数据集管理（左右布局）========== -->
+  <!-- ========== 训练（独立页面）========== -->
   <section class="panel" id="tab-train">
     <div class="split">
-      <div>
-        <h2>数据集（data/datasets/）</h2>
-        <div id="datasetList" class="list"></div>
-        <p class="hint">
-          目录结构：<code>&lt;数据集&gt;/images/train</code> + <code>&lt;数据集&gt;/labels/train</code>，
-          可选 <code>classes.txt</code> 写类别名（没有 <code>data.yaml</code> 时自动生成）
-        </p>
-      </div>
       <div>
         <h2>训练参数</h2>
         <div class="form">
@@ -122,23 +116,45 @@
           <label>学习率 lr0 <input type="number" id="trainLr0" value="0.01" step="0.001" min="0.0001"></label>
           <button class="btn" id="trainBtn">开始训练</button>
         </div>
-        <div id="trainResult" class="result-box"></div>
+      </div>
+      <div>
+        <h2>训练结果</h2>
+        <div id="trainResult" class="result-box">设置参数后点「开始训练」</div>
       </div>
     </div>
-    <div class="annotate">
-      <h2>标注数据
-        <button class="btn small ghost" id="refreshAnnotate">刷新</button>
-      </h2>
-      <div class="annotate-bar">
-        <label>数据集 <select id="annotateDataset"></select></label>
-        <label>子集 <select id="annotateSplit">
-          <option value="train">Train（训练集）</option>
-          <option value="val">Val（验证集）</option>
-        </select></label>
-        <span class="annotate-stat" id="annotateStat"></span>
-        <span class="annotate-tip">点图片进入全屏标注 → 预标注 → 改框/加框 → 保存</span>
+  </section>
+
+  <!-- ========== 数据集管理（第 5 个标签页：数据集 | 数据标注）========== -->
+  <section class="panel" id="tab-dataset">
+    <div class="split">
+
+      <!-- 左：数据集 -->
+      <div>
+        <h2>数据集
+          <button class="btn small ghost" id="refreshAnnotate">刷新</button>
+        </h2>
+        <div id="datasetList" class="list"></div>
+        <p class="hint">
+          数据集目录：<code>images/train</code> + <code>labels/train</code>（val 可选）；
+          类别写在 <code>data.yaml</code> 里，由标注器维护。
+        </p>
       </div>
-      <div id="annotateGrid" class="grid"></div>
+
+      <!-- 右：数据标注 -->
+      <div>
+        <h2>数据标注</h2>
+        <div class="annotate-bar">
+          <label>数据集 <select id="annotateDataset"></select></label>
+          <label>子集 <select id="annotateSplit">
+            <option value="train">Train（训练集）</option>
+            <option value="val">Val（验证集）</option>
+          </select></label>
+          <span class="annotate-stat" id="annotateStat"></span>
+        </div>
+        <p class="hint">点缩略图进入全屏标注 → 预标注 → 改框/加框 → 保存。</p>
+        <div id="annotateGrid" class="grid annotate-grid"></div>
+      </div>
+
     </div>
   </section>
 
@@ -198,6 +214,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=32"></script>
+<script src="/app.js?v=34"></script>
 </body>
 </html>

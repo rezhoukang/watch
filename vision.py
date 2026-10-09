@@ -1,4 +1,4 @@
-"""YOLOv8 封装：图片检测 / 视频检测 / 模型训练
+"""YOLOv8 封装：图片推理 / 视频推理 / 模型训练
 
 对外只暴露简单函数，模型实例按权重名缓存，避免重复加载。
 ultralytics / torch 采用懒加载：即使依赖未装好，Web 服务也能正常启动。
@@ -12,9 +12,9 @@ from typing import Any, Callable, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"            # 唯一的权重目录（含自动下载的缓存）
-RESULTS_DIR = BASE_DIR / "data" / "results"  # 检测结果图
+RESULTS_DIR = BASE_DIR / "data" / "results"  # 推理结果图
 VIDEO_DIR = BASE_DIR / "data" / "videos"     # 上传的视频
-OUTPUT_DIR = BASE_DIR / "data" / "outputs"   # 检测结果视频
+OUTPUT_DIR = BASE_DIR / "data" / "outputs"   # 推理结果视频
 DATASETS_DIR = BASE_DIR / "data" / "datasets"  # 训练数据集
 RUNS_DIR = BASE_DIR / "data" / "runs"        # 训练输出
 
@@ -212,7 +212,7 @@ def clear_model_cache() -> int:
         return n
 
 
-# ---------- 图片检测 ----------
+# ---------- 图片推理 ----------
 def _clamp_imgsz(imgsz: int) -> int:
     """推理尺寸钳制到 320~1920，并对齐 32 的倍数（YOLO 下采样步长）"""
     v = max(320, min(int(imgsz), 1920))
@@ -227,7 +227,7 @@ def detect_image(
     imgsz: int = 640,
     save_result: bool = True,
 ) -> dict:
-    """检测单张图片，保存带框结果，返回检测详情
+    """推理单张图片，保存带框结果，返回推理详情
 
     classes: 仅对 World 模型生效；为空则使用权重内置类别
     imgsz:   推理分辨率（会钳制到 320~1920 并对齐 32 的倍数）
@@ -305,7 +305,7 @@ def detect_image(
     }
 
 
-# ---------- 视频检测（后台任务）----------
+# ---------- 视频推理（后台任务）----------
 def video_info(src: Path) -> dict | None:
     """读取视频元信息（前端时间轴用）。读取失败返回 None"""
     try:
@@ -333,7 +333,7 @@ def video_info(src: Path) -> dict | None:
 def _annotate_frame(
     frame, r: Any, render: str = "box", line_width: int = 2
 ) -> Any:
-    """按选定的显示形式把检测结果画到帧上，返回可写入视频的 BGR 图
+    """按选定的显示形式把推理结果画到帧上，返回可写入视频的 BGR 图
 
     render:
       - "box" 默认：框 + 类别标签
@@ -388,11 +388,11 @@ def start_video_job(
     render: str = "box",
     line_width: int = 2,
 ) -> str:
-    """启动视频检测后台任务，返回 job_id
+    """启动视频推理后台任务，返回 job_id
 
-    stride: 每 N 帧检测一次（>1 时中间帧复用上次结果，可提速）
+    stride: 每 N 帧推理一次（>1 时中间帧复用上次结果，可提速）
     classes: 仅对 World 模型生效
-    start/end: 只检测 [start, end) 秒区间（默认全片）；输出视频只含该区间
+    start/end: 只推理 [start, end) 秒区间（默认全片）；输出视频只含该区间
     render: "box" 框 / "dot" 中心点（密集小目标用点更清晰）
     """
     _ensure_dirs()
@@ -489,7 +489,7 @@ def _run_video_job(
             ok, frame = cap.read()
             if not ok:
                 break
-            # 按 stride 抽帧检测，其余帧复用上一帧结果
+            # 按 stride 抽帧推理，其余帧复用上一帧结果
             if idx % stride == 0:
                 r = model.predict(source=frame, conf=conf, device=dev, verbose=False)[0]
                 last_annotated = _annotate_frame(
@@ -885,7 +885,7 @@ def prelabel_image(
     classes: list[str] | None = None,
     imgsz: int = 640,
 ) -> list[dict]:
-    """对单张图片做检测，返回可用作标注的框（原图像素 + 置信度）"""
+    """对单张图片做推理，返回可用作标注的框（原图像素 + 置信度）"""
     result = detect_image(
         img_path, weights=weights, conf=conf, classes=classes, imgsz=imgsz, save_result=False
     )
