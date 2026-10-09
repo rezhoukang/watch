@@ -624,16 +624,74 @@ def find_dataset_dir(img_path: Path) -> Path:
 
 
 def dataset_classes(ds_dir: Path) -> list[str]:
-    """数据集的类别清单（classes.txt 优先）"""
-    return _read_classes(ds_dir)
+    """数据集的类别清单
+
+    **唯一来源是 data.yaml 的 names**（项目已取消 classes.txt：
+    类别只能在图形界面里增删改，改完直接落到 data.yaml）。
+    没有 data.yaml 时从 label 反推最大 class_id 兜底。
+    """
+    names = _read_yaml_names(ds_dir)
+    if names:
+        return names
+    return _infer_classes(ds_dir)
+
+
+def _read_yaml_names(ds_dir: Path) -> list[str] | None:
+    """读 data.yaml 的 names（list / dict 两种写法都支持）。读不到返回 None"""
+    yaml_path = ds_dir / "data.yaml"
+    if not yaml_path.is_file():
+        return None
+    try:
+        import yaml
+
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        return _names_of(data)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _names_of(data: object) -> list[str] | None:
+    """把 data.yaml 里的 names 归一化成 list[str]（dict 键按数值排序还原顺序）"""
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("names")
+    if isinstance(raw, dict):
+        try:
+            pairs = sorted(raw.items(), key=lambda kv: int(kv[0]))
+        except (TypeError, ValueError):
+            pairs = list(raw.items())
+        out = [str(v) for _, v in pairs]
+        return out or None
+    if isinstance(raw, list):
+        out = [str(v) for v in raw]
+        return out or None
+    return None
+
+
+def _infer_classes(ds_dir: Path) -> list[str]:
+    """没有 data.yaml 时，从 label 里反推最大 class_id 生成 class_0, class_1…"""
+    max_id = -1
+    for lbl_dir in (
+        ds_dir / "labels" / "train",
+        ds_dir / "labels" / "val",
+        ds_dir / "labels",
+    ):
+        if not lbl_dir.is_dir():
+            continue
+        for f in lbl_dir.glob("*.txt"):
+            for ln in f.read_text(encoding="utf-8", errors="ignore").splitlines():
+                parts = ln.split()
+                if parts and parts[0].lstrip("-").isdigit():
+                    max_id = max(max_id, int(parts[0]))
+    return [f"class_{i}" for i in range(max_id + 1)] if max_id >= 0 else ["object"]
 
 
 def append_dataset_classes(ds_dir: Path, names: list[str]) -> list[str]:
-    """把新类别追加到 classes.txt 末尾（不影响已有类别的 id），返回更新后的清单
+    """把新类别追加到 data.yaml 末尾（不改动已有类别的 id），返回更新后的清单
 
     预标注时模型可能检出数据集里还没有的类别（如 COCO 的 chair）。
-    直接追加而不重排，保证已有 label 的 class_id 不会错位。
-    names 内部的重复项会被去重（同一张图可能检出多个同类目标）。
+    只追加不重排，保证已有 label 的 class_id 不会错位。
+    names 内部的重复项会去重（同一张图可能有多个同类目标）。
     """
     merged = dataset_classes(ds_dir)
     added = False
@@ -642,39 +700,69 @@ def append_dataset_classes(ds_dir: Path, names: list[str]) -> list[str]:
             merged.append(n)
             added = True
     if added:
-        (ds_dir / "classes.txt").write_text("\n".join(merged) + "\n", encoding="utf-8")
-        _sync_data_yaml(ds_dir, merged)
-        _invalidate_label_cache(ds_dir)
+        write_dataset_classes(ds_dir, merged)
     return merged
 
 
-def _sync_data_yaml(ds_dir: Path, names: list[str]) -> None:
-    """classes.txt 变了就同步 data.yaml 的 nc / names
+def write_dataset_classes(ds_dir: Path, names: list[str]) -> list[str]:
+    """把类别清单写进 data.yaml（names 与 nc 一起写），并清掉训练用的标注缓存
 
-    数据集若自带 data.yaml，它的 nc/names 是写死的 —— 不同步的话，
-    标注器新增的类别训练时看不到，还会因 class_id 越界而报错。
+    - data.yaml 是类别的**唯一来源**（项目已取消 classes.txt）
+    - 只改名字/追加，class_id 就是下标，所以已有 label 文件不必重写
+    - `nc` 必须等于 names 长度：不一致时 ultralytics 会直接抛 SyntaxError 拒绝训练，
+      所以两者永远一起写；顺带补齐 path / train / val（用户手写的 yaml 可能缺）
+    - 内容已经完全一致时不重写文件、也不清缓存（避免每次训练都全量重扫 label）
     """
+    cleaned = [str(n).strip() for n in names]
+    if not cleaned or any(not n for n in cleaned):
+        raise ValueError("类别名不能为空")
+    if len(set(cleaned)) != len(cleaned):
+        raise ValueError("类别名不能重复")
+
     yaml_path = ds_dir / "data.yaml"
-    if not yaml_path.is_file():
-        return
+    data: dict = {}
+    if yaml_path.is_file():
+        try:
+            import yaml
+
+            loaded = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:  # noqa: BLE001
+            data = {}   # yaml 坏了就重建一份
+
+    # 已经完全一致 → 什么都不做
+    if (
+        data.get("nc") == len(cleaned)
+        and _names_of(data) == cleaned
+        and data.get("path")
+        and data.get("train")
+        and data.get("val")
+    ):
+        return cleaned
+
+    # 补齐 ultralytics 需要的字段（只填缺失的，不动用户已有配置）
+    data.setdefault("path", ds_dir.as_posix())
+    if not data.get("train"):
+        data["train"] = "images/train"
+    if not data.get("val"):
+        data["val"] = (
+            "images/val" if (ds_dir / "images" / "val").is_dir() else "images/train"
+        )
+    data["nc"] = len(cleaned)
+    data["names"] = {i: n for i, n in enumerate(cleaned)}
+
     try:
         import yaml
+    except ImportError as e:   # noqa: BLE001
+        raise RuntimeError(f"缺少 PyYAML，无法写入 data.yaml：{e}") from e
 
-        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-        if not isinstance(data, dict):
-            return
-        raw = data.get("names")
-        cur = list(raw.values()) if isinstance(raw, dict) else list(raw or [])
-        if data.get("nc") == len(names) and cur == names:
-            return
-        data["nc"] = len(names)
-        data["names"] = {i: n for i, n in enumerate(names)}
-        yaml_path.write_text(
-            yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    except Exception:  # noqa: BLE001
-        pass   # yaml 缺失/损坏时不阻塞标注流程
+    # 传文件对象当 stream：返回 None，避免 PyYAML 存根把返回值标成
+    # bytes|str|None 而与 write_text 的类型冲突
+    with yaml_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+    _invalidate_label_cache(ds_dir)
+    return cleaned
 
 
 def _invalidate_label_cache(ds_dir: Path) -> None:
@@ -913,52 +1001,15 @@ def _extract_metrics(trainer) -> dict:
 
 
 def _prepare_data_yaml(ds_dir: Path) -> Path:
-    """若数据集没有 data.yaml，根据 images/labels 结构自动生成
+    """确保 data.yaml 存在且合法，返回它的路径
 
-    支持两种结构：
-      A. <ds>/images/{train,val}、<ds>/labels/{train,val}  （YOLO 标准）
-      B. <ds>/images、<ds>/labels                          （单目录，全部当训练集）
+    类别以 data.yaml 为唯一来源（不再有 classes.txt），所以这里不再"生成一份副本"，
+    而是统一走 write_dataset_classes()：
+      - 文件缺失 → 按目录结构 + label 反推生成
+      - nc 与 names 不一致 → 修好（ultralytics 遇到不一致会直接抛 SyntaxError）
+      - 缺 path/train/val → 补齐
+    内容已一致时不会重写文件，也不会清标注缓存。
     """
-    yaml_path = ds_dir / "data.yaml"
-    if yaml_path.exists():
-        return yaml_path
-
-    lines = [f"path: {ds_dir.as_posix()}", "train: images/train"]
-    if (ds_dir / "images" / "val").is_dir():
-        lines.append("val: images/val")
-    else:
-        lines.append("val: images/train")
-
-    names = _read_classes(ds_dir)
-    lines.append(f"nc: {len(names)}")
-    lines.append("names:")
-    for i, n in enumerate(names):
-        lines.append(f"  {i}: {n}")
-
-    yaml_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return yaml_path
-
-
-def _read_classes(ds_dir: Path) -> list[str]:
-    """从 classes.txt 读取类别名；没有则用 class_0, class_1…"""
-    classes_file = ds_dir / "classes.txt"
-    if classes_file.exists():
-        names = [
-            ln.strip()
-            for ln in classes_file.read_text(encoding="utf-8").splitlines()
-            if ln.strip()
-        ]
-        if names:
-            return names
-
-    # 从标注里推断最大类别 id
-    max_id = -1
-    for lbl_dir in (ds_dir / "labels" / "train", ds_dir / "labels"):
-        if not lbl_dir.is_dir():
-            continue
-        for f in lbl_dir.glob("*.txt"):
-            for ln in f.read_text(encoding="utf-8", errors="ignore").splitlines():
-                parts = ln.split()
-                if parts and parts[0].isdigit():
-                    max_id = max(max_id, int(parts[0]))
-    return [f"class_{i}" for i in range(max_id + 1)] if max_id >= 0 else ["object"]
+    names = _read_yaml_names(ds_dir) or _infer_classes(ds_dir)
+    write_dataset_classes(ds_dir, names)
+    return ds_dir / "data.yaml"

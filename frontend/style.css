@@ -676,11 +676,21 @@ input[type="number"] { width: 88px; }
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  padding: 14px;
+  /* 上/右留白：框的类别下拉（top:-22px）与删除按钮（top:-20px, right:-16px）
+     会伸到图片外侧，靠这份 padding 才不会被 overflow:hidden 裁掉 */
+  padding: 30px 22px 16px;
   min-width: 0;
 }
 /* 画布：尺寸 = 图片显示尺寸（框层用百分比定位，必须严格贴合图片） */
-.ann-canvas { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
+.ann-canvas {
+  position: relative;
+  line-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  /* 长按画框时不要选中文字 / 触发原生拖拽（JS 里还有 dragstart 拦截兜底） */
+  user-select: none;
+  -webkit-user-select: none;
+}
 .annotator-stage img.ann-base {
   max-width: 100%;
   max-height: 100%;
@@ -709,12 +719,43 @@ input[type="number"] { width: 88px; }
   background: rgba(26, 115, 232, .12);
   pointer-events: none;
 }
-/* 点模式：框淡显，中心点突出 */
-.ann-box.as-dot { border-style: dashed; opacity: .55; }
+/* 点模式：平时只看到一个中心点，鼠标移到点上才浮现虚线框 + 标签
+ * 用 visibility 而不是 display：父节点隐藏时子节点可用 visibility:visible 单独显示，
+ * 而 :hover 是按「命中的元素及其祖先」匹配的 —— 命中子节点（点）照样能让父节点进入 hover。
+ *
+ * 半透明只给「框」：用带 alpha 的边框色 --c-soft（JS 写入）。
+ * 千万不能用父节点的 opacity —— 它无法只作用于边框，还会把里面的
+ * 中心点一起变淡（中心点必须 100% 不透明）。
+ */
+.ann-box.as-dot {
+  border-style: dashed;
+  border-color: var(--c-soft, var(--c, #1a73e8));
+  visibility: hidden;
+  pointer-events: none;    /* 事件交给里面的点接管 */
+}
+.ann-box.as-dot:hover {
+  visibility: visible;
+  pointer-events: auto;    /* 显示后框和标签都要可点 */
+}
 .ann-box .ann-dot {
   position: absolute;
   left: 0;
   top: 0;
+  /* 22px 只是鼠标热区，视觉上的小圆点由 ::after 画（10px），
+     否则 10px 的点太难点中，hover 出手感很差 */
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;   /* 让 (cx,cy) 正好落在容器中心 */
+  border-radius: 50%;
+  background: transparent;
+  visibility: visible;       /* 父节点隐藏时它仍需可见，否则没东西可 hover */
+  pointer-events: auto;
+}
+.ann-box .ann-dot::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
   width: 10px;
   height: 10px;
   margin: -5px 0 0 -5px;
@@ -722,8 +763,11 @@ input[type="number"] { width: 88px; }
   background: var(--c, #1a73e8);
   border: 2px solid #fff;
   box-shadow: 0 0 5px rgba(0, 0, 0, .6);
-  pointer-events: none;
 }
+/* 关掉「标签」后：任何模式下都不显示类别标签，但框照常显示
+ *（点模式 hover 时也只看得到框，看不到标签）*/
+.ann-boxes.no-labels .ann-cls-select { display: none; }
+
 /* 缩放把手（仅框模式） */
 .ann-handle {
   position: absolute;
@@ -747,15 +791,14 @@ input[type="number"] { width: 88px; }
   font-family: inherit;
   padding: 1px 3px;
   border: 1px solid var(--c, #1a73e8);
-  border-radius: 3px;
-  background: var(--c, #1a73e8);
+  border-radius: 3px;  background: var(--c, #1a73e8);
   color: #fff;
   cursor: pointer;
 }
 .ann-del {
   position: absolute;
-  right: -10px;
-  top: -12px;
+  right: -16px;
+  top: -20px;
   width: 18px;
   height: 18px;
   line-height: 16px;
@@ -799,8 +842,28 @@ input[type="number"] { width: 88px; }
   letter-spacing: .4px;
   margin-bottom: 8px;
 }
-.ann-classes { display: flex; flex-wrap: wrap; gap: 6px; }
+.ann-classes { display: flex; flex-direction: column; gap: 6px; }
+.ann-class-row { display: flex; align-items: center; gap: 4px; }
+.ann-class-edit {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: #9aa0a6;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.ann-class-edit:hover { background: #f1f3f4; color: #1a73e8; }
 .ann-class {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border: 1px solid var(--c, #1a73e8);
   background: #fff;
   color: var(--c, #1a73e8);
@@ -811,6 +874,20 @@ input[type="number"] { width: 88px; }
   cursor: pointer;
 }
 .ann-class.active { background: var(--c, #1a73e8); color: #fff; }
+/* 新增类别（类别的增删改只能在这个界面做） */
+.ann-class-add {
+  margin-top: 2px;
+  border: 1px dashed #c4c7cc;
+  background: #fff;
+  color: #5f6368;
+  border-radius: 14px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: center;
+}
+.ann-class-add:hover { border-color: #1a73e8; color: #1a73e8; background: #f8fbff; }
 
 @media (max-width: 860px) {
   .annotator-side { width: 170px; flex-basis: 170px; }

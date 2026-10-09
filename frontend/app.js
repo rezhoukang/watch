@@ -58,6 +58,25 @@ window.addEventListener('unhandledrejection', (ev) => {
   banner(`异步异常：${r instanceof Error ? r.message : String(r)}`);
 });
 
+/* 禁用浏览器对图片的「原生拖拽」
+ *
+ * 标注是「长按拖拽画框」的手势，而浏览器在按住图片拖动时会启动
+ * 自己的拖拽（图片幽灵跟着光标、松手后可能触发导航），两者直接冲突。
+ * 所以：
+ *   1. 全局拦 dragstart（CSS 的 -webkit-user-drag 只管 Chromium，
+ *      Firefox 不认，必须在 JS 里拦才跨浏览器）
+ *   2. 标注器里的图片再设 draggable=false（掐掉可能发起拖拽的源头）
+ */
+document.addEventListener('dragstart', (ev) => {
+  const t = ev.target;
+  if (!t) return;
+  // 图片本身，或标注器里的任何元素，都不允许发起原生拖拽
+  if (t.tagName === 'IMG' || (t.closest && t.closest('#annotatorMask'))) {
+    ev.preventDefault();
+  }
+});
+el('annBaseImg').draggable = false;
+
 /* ==================== 请求封装（带超时 + 明确错误）==================== */
 
 async function api(path, options = {}, timeoutMs = 30000) {
@@ -348,6 +367,11 @@ const DEDUP_DEFAULT = true;
 /** 类别 → 颜色：黄金角取色，区分度高且白字可读 */
 function classColor(i) {
   return `hsl(${Math.round((i * 137.508) % 360)}, 62%, 42%)`;
+}
+
+/** 同上，但带透明度：给「框半透明、中心点不透明」用 */
+function classColorA(i, alpha) {
+  return `hsla(${Math.round((i * 137.508) % 360)}, 62%, 42%, ${alpha})`;
 }
 
 /** 渲染整个结果页（原图 + 前端叠加框 + 筛选条 + 明细表） */
@@ -1239,6 +1263,9 @@ el('trainBtn').addEventListener('click', async () => {
 
 let ANN = null;   // 当前标注会话
 
+/** 类别下拉里「重命名本类」那个特殊选项的值（不是真的 class_id） */
+const RENAME_OPT = '__rename__';
+
 /** 缩略图网格：列出数据集某子集的图片 + 已标注状态 */
 async function loadAnnotateGrid() {
   const grid = el('annotateGrid');
@@ -1269,7 +1296,7 @@ async function loadAnnotateGrid() {
       const fig = document.createElement('figure');
       fig.title = '点击进入全屏标注：' + f;
       fig.innerHTML =
-        `<img src="/api/annotate/raw/${encodeURIComponent(ds)}/${encodeURIComponent(split)}/${encodeURIComponent(f)}" alt="" loading="lazy">` +
+        `<img src="/api/annotate/raw/${encodeURIComponent(ds)}/${encodeURIComponent(split)}/${encodeURIComponent(f)}" alt="" loading="lazy" draggable="false">` +
         `<figcaption>${esc(f)}</figcaption>`;
       fig.addEventListener('click', () => openAnnotator(ds, split, f));
       grid.appendChild(fig);
@@ -1290,10 +1317,13 @@ async function openAnnotator(ds, split, filename) {
 
   ANN = {
     rel,
+    dsName: ds,        // 数据集名（改类别名时要写进 data.yaml）
+    split,
     dsClasses: [],
     dets: [],          // [{class_id, class_name, confidence, bbox:[x1,y1,x2,y2]}]
     active: -1,        // 当前选中框
     shape: 'box',      // 'box' | 'dot'
+    showLabels: el('annShowLabels').checked,   // 标签开关（跨图片记住上次选择）
     naturalW: 1,
     naturalH: 1,
     filter: null,      // 只看某一类（null = 全部）
@@ -1351,11 +1381,14 @@ function annMsg(text) {
   el('annMsg').textContent = text || '';
 }
 
-/** 左侧类别筛选列表 */
+/** 左侧类别筛选列表（每个类别带一个 ✎ 改名按钮 + 底部「新增类别」） */
 function paintAnnClasses() {
   const box = el('annClassesList');
   box.innerHTML = '';
   ANN.dsClasses.forEach((name, i) => {
+    const row = document.createElement('span');
+    row.className = 'ann-class-row';
+
     const b = document.createElement('button');
     b.className = 'ann-class';
     b.style.setProperty('--c', classColor(i));
@@ -1367,17 +1400,107 @@ function paintAnnClasses() {
       paintAnnClasses();
       paintAnn();
     });
-    box.appendChild(b);
+
+    const ed = document.createElement('button');
+    ed.className = 'ann-class-edit';
+    ed.type = 'button';
+    ed.textContent = '✎';
+    ed.title = `重命名类别「${name}」`;
+    ed.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      void renameClass(i);
+    });
+
+    row.appendChild(b);
+    row.appendChild(ed);
+    box.appendChild(row);
   });
+
+  // 新增类别：类别的增删改都只能在这里做（不再有 classes.txt 可以手改），
+  // 改完由后端直接写进 data.yaml 的 names + nc
+  const add = document.createElement('button');
+  add.className = 'ann-class-add';
+  add.type = 'button';
+  add.textContent = '＋ 新增类别';
+  add.title = '新增一个类别（会写入 data.yaml）';
+  add.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    void addClass();
+  });
+  box.appendChild(add);
 }
 
-/** 类别 → 颜色（与检测结果页同一套黄金角取色） */
-function annClassColor(clsId, name) {
+/** 新增一个类别：追加到末尾 → class_id 顺延，不影响已有 label */
+async function addClass() {
+  if (!ANN) return;
+  const input = prompt('新增类别名：', '');
+  if (input === null) return;
+  const name = input.trim();
+  if (!name) return;
+  if (ANN.dsClasses.includes(name)) {
+    annMsg(`类别「${name}」已存在`);
+    return;
+  }
+  await saveClasses([...ANN.dsClasses, name], `已新增类别「${name}」（id=${ANN.dsClasses.length}）`);
+}
+
+/** 重命名数据集的第 i 个类别
+ *
+ * 只改名字：class_id（data.yaml 里 names 的下标）不变，所以已有 label 文件
+ * 里的数字不需要重写。后端会一并写 data.yaml 的 names/nc 并清训练标注缓存。
+ */
+async function renameClass(i) {
+  if (!ANN || i < 0 || i >= ANN.dsClasses.length) return;
+  const old = ANN.dsClasses[i];
+  const input = prompt(`重命名类别「${old}」为：`, old);
+  if (input === null) return;               // 取消
+  const name = input.trim();
+  if (!name || name === old) return;
+  if (ANN.dsClasses.includes(name)) {
+    annMsg(`类别「${name}」已存在，不能重名`);
+    return;
+  }
+  const names = ANN.dsClasses.slice();
+  names[i] = name;
+  await saveClasses(names, `已改名为「${name}」（class_id 不变，无需重新保存标注）`);
+}
+
+/** 把整份类别清单提交给后端（改名 / 新增都走这里） */
+async function saveClasses(names, okMsg) {
+  if (!ANN) return;
+  annMsg('正在更新类别…');
+  try {
+    const res = await api(
+      `/api/datasets/${encodeURIComponent(ANN.dsName)}/classes`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classes: names }),
+      },
+      30000
+    );
+    if (!ANN) return;   // 提交期间用户可能已关掉标注器
+    ANN.dsClasses = res.classes || names;
+    // 已载入的标注跟着换显示名（class_id 未变，label 文件无需重写）
+    ANN.dets.forEach((d) => {
+      d.class_name = ANN.dsClasses[d.class_id] || String(d.class_id);
+    });
+    paintAnnClasses();
+    paintAnn();
+    annMsg(okMsg);
+    loadAnnotateGrid();
+  } catch (e) {
+    if (ANN) annMsg(`更新类别失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** 类别 → 调色用的下标（与检测结果页同一套黄金角取色） */
+function annClassIndex(clsId, name) {
   let idx = clsId;
   if (typeof idx !== 'number' || idx < 0) {
     idx = ANN.dsClasses.indexOf(name);
   }
-  return classColor(idx < 0 ? 0 : idx);
+  return idx < 0 ? 0 : idx;
 }
 
 /** 重画所有标注框（框/点两种形式）+ 左侧列表 */
@@ -1386,27 +1509,33 @@ function paintAnn() {
   const wrap = el('annBoxes');
   wrap.innerHTML = '';
 
-  const pct = (v, total) => `${(v / total) * 100}%`;
+  // 标签开关：关掉后任何模式下都不显示类别标签
+  // （点模式 hover 时也只出现框，不出现标签）
+  wrap.classList.toggle('no-labels', !ANN.showLabels);
+
   const visible = [];
 
   ANN.dets.forEach((d, i) => {
     if (ANN.filter !== null && d.class_id !== ANN.filter) return;
     visible.push(i);
 
-    const [x1, y1, x2, y2] = d.bbox;
-    const color = annClassColor(d.class_id, d.class_name);
+    const ci = annClassIndex(d.class_id, d.class_name);
+    const color = classColor(ci);
     const node = document.createElement('div');
     node.className = 'ann-box' + (ANN.active === i ? ' active' : '');
     node.dataset.i = String(i);
     node.style.setProperty('--c', color);
-    node.style.left = pct(x1, ANN.naturalW);
-    node.style.top = pct(y1, ANN.naturalH);
-    node.style.width = pct(x2 - x1, ANN.naturalW);
-    node.style.height = pct(y2 - y1, ANN.naturalH);
+    // 点模式下框要半透明，但中心点必须不透明。
+    // 不能用父节点的 opacity —— 那会把里面的中心点一起变淡，
+    // 所以单独给边框一个带 alpha 的颜色变量（--c-soft）。
+    node.style.setProperty('--c-soft', classColorA(ci, 0.55));
+    // 拖拽/新建过程中不要整层重建 DOM，否则手感发顿（不跟手）
+    applyAnnBoxRect(node, d.bbox);
 
-    // 类别标签（下拉可改）
+    // 类别标签：下拉直接切换；最后一项是「重命名本类…」
     const sel = document.createElement('select');
     sel.className = 'ann-cls-select';
+    sel.title = '切换类别，或选最后一项重命名这个类别';
     ANN.dsClasses.forEach((name, ci) => {
       const o = document.createElement('option');
       o.value = String(ci);
@@ -1414,14 +1543,26 @@ function paintAnn() {
       if (ci === d.class_id) o.selected = true;
       sel.appendChild(o);
     });
+    const rn = document.createElement('option');
+    rn.value = RENAME_OPT;
+    rn.textContent = '✎ 重命名本类…';
+    sel.appendChild(rn);
     sel.addEventListener('change', (ev) => {
       ev.stopPropagation();
+      if (sel.value === RENAME_OPT) {
+        void renameClass(d.class_id);
+        return;               // renameClass 里会重画，不用在这里改 class_id
+      }
       d.class_id = Number(sel.value);
       d.class_name = ANN.dsClasses[d.class_id] || String(d.class_id);
       ANN.dirty = true;
       paintAnn();
     });
     sel.addEventListener('mousedown', (ev) => ev.stopPropagation());
+    // click 也必须拦住：否则冒泡到 .ann-box 的选中逻辑，会重建 DOM 把
+    // <select> 整个销毁掉，原生下拉弹层会立刻被收回（点不开）
+    sel.addEventListener('click', (ev) => ev.stopPropagation());
+    sel.addEventListener('dblclick', (ev) => ev.stopPropagation());
 
     // 删除按钮
     const del = document.createElement('button');
@@ -1442,14 +1583,17 @@ function paintAnn() {
     node.appendChild(del);
 
     if (ANN.shape === 'dot') {
-      // 点模式：中心画一个点，框用虚线淡显
+      // 点模式：只在框中心画一个点，框用虚线淡显（hover 才浮现）
       node.classList.add('as-dot');
-      const cx = (x1 + x2) / 2;
-      const cy = (y1 + y2) / 2;
       const dot = document.createElement('i');
       dot.className = 'ann-dot';
-      dot.style.left = pct(cx, ANN.naturalW);
-      dot.style.top = pct(cy, ANN.naturalH);
+      // 必须用 50%/50%，不能用 pct(cx, naturalW)：
+      // .ann-dot 是 .ann-box 的子元素，而 .ann-box 是 position:absolute，
+      // 它的百分比基准是**框**（不是图片）—— 写成 pct(cx, 图宽) 会让点
+      // 落在框内 44% 而不是 50%，即偏在框心左侧（框越窄偏得越多），
+      // 抓起来拖动就会感觉“不跟手”。框本来就由 cx/cy 算出，框心即中心点。
+      dot.style.left = '50%';
+      dot.style.top = '50%';
       node.appendChild(dot);
     } else {
       // 框模式：四个角把手用于缩放
@@ -1465,7 +1609,7 @@ function paintAnn() {
     node.addEventListener('click', (ev) => {
       ev.stopPropagation();
       ANN.active = i;
-      paintAnn();
+      syncAnnActive();   // 只切高亮，不重建 DOM（重建会打断下拉框等交互）
     });
 
     wrap.appendChild(node);
@@ -1476,8 +1620,33 @@ function paintAnn() {
   el('annSave').textContent = ANN.dirty ? '保存 *' : '保存';
 }
 
+/** 把 bbox 写成节点的百分比定位（左/上/宽/高）
+ *
+ * 拖拽过程中只改这一个节点的样式，不重建整个框层 ——
+ * 每次 mousemove 都 paintAnn() 会反复销毁/重建 DOM，手感发顿（不跟手）。
+ */
+function applyAnnBoxRect(node, bbox) {
+  const [x1, y1, x2, y2] = bbox;
+  const pct = (v, total) => `${(v / total) * 100}%`;
+  node.style.left = pct(x1, ANN.naturalW);
+  node.style.top = pct(y1, ANN.naturalH);
+  node.style.width = pct(x2 - x1, ANN.naturalW);
+  node.style.height = pct(y2 - y1, ANN.naturalH);
+}
+
+/** 只切「哪个框是选中态」，不重建 DOM */
+function syncAnnActive() {
+  document.querySelectorAll('#annBoxes .ann-box').forEach((n) => {
+    n.classList.toggle('active', Number(n.dataset.i) === ANN.active);
+  });
+}
+
 /** 在图片上拖拽：移动已有框 / 拖角缩放 / 空白处画新框 */
 function startAnnDrag(ev, i, node, mode) {
+  // 点在下拉框或删除按钮上时不要进入拖拽（它们有自己的交互）
+  if (ev.target && ev.target.closest && ev.target.closest('.ann-cls-select, .ann-del')) {
+    return;
+  }
   ev.preventDefault();
   ev.stopPropagation();
 
@@ -1514,12 +1683,14 @@ function startAnnDrag(ev, i, node, mode) {
       box.bbox = [nx, ny, nx + w, ny + h];
     }
     ANN.dirty = true;
-    paintAnn();
+    // 只更新被拖的这个节点，不重建整个框层
+    applyAnnBoxRect(node, box.bbox);
   };
 
   const onUp = () => {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
+    paintAnn();   // 松手后再整体重画一次，把标签/计数等同步过来
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
@@ -1528,6 +1699,9 @@ function startAnnDrag(ev, i, node, mode) {
 /** 空白处按下 → 画新框 */
 function startAnnDraw(ev) {
   if (!ANN || ev.target.closest('.ann-box')) return;
+  // 关键：阻止 mousedown 的默认行为，否则浏览器会接管成
+  // 「拖拽图片」或「选中文字」，与长按画框的手势冲突
+  ev.preventDefault();
   const rect = el('annCanvas').getBoundingClientRect();
   const sx = ANN.naturalW / rect.width;
   const sy = ANN.naturalH / rect.height;
@@ -1593,6 +1767,13 @@ document.querySelectorAll('#annShape .seg-btn').forEach((b) => {
       .forEach((x) => x.classList.toggle('active', x === b));
     paintAnn();
   });
+});
+
+/** 标签开关：关掉后任何模式下都不显示类别标签（点模式 hover 也只出框） */
+el('annShowLabels').addEventListener('change', (ev) => {
+  if (!ANN) return;
+  ANN.showLabels = ev.target.checked;
+  el('annBoxes').classList.toggle('no-labels', !ANN.showLabels);
 });
 
 /** 预标注：调后端检测，把结果直接变成标注框 */
@@ -1691,7 +1872,25 @@ el('annotatorMask').addEventListener('click', (ev) => {
   if (ev.target === el('annotatorMask')) closeAnnotator();
 });
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && ANN) closeAnnotator();
+  if (!ANN) return;
+  const t = ev.target;
+  const tag = t && t.tagName ? String(t.tagName).toUpperCase() : '';
+  // 焦点在输入框/下拉框里时，键盘事件交给控件自己处理
+  const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  if (ev.key === 'Escape') {
+    if (typing) return;      // 只收起下拉框，不要连带关掉整个标注器
+    closeAnnotator();
+    return;
+  }
+  // 选中标注后按 Delete 删除（避免在控件里打字时误删）
+  if (ev.key === 'Delete' && ANN.active >= 0) {
+    if (typing) return;
+    ev.preventDefault();
+    ANN.dets.splice(ANN.active, 1);
+    ANN.active = -1;
+    ANN.dirty = true;
+    paintAnn();
+  }
 });
 
 /* ==================== 通用：轮询后台任务 ====================

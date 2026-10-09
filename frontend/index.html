@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=21">
+<link rel="stylesheet" href="/style.css?v=26">
 </head>
 <body>
 <div class="app">
@@ -153,6 +153,7 @@
             <button class="seg-btn active" data-shape="box">框</button>
             <button class="seg-btn" data-shape="dot">中心点</button>
           </div>
+          <label title="关掉后连 hover 也不显示类别标签，只显示框"><input type="checkbox" id="annShowLabels" checked> 标签</label>
           <label>置信度 <input type="number" id="annConf" value="0.25" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
           <label>模型 <select id="annWeights"></select></label>
           <label id="annClassesWrap" hidden>prompt <input type="text" id="annClasses" value="person" placeholder="person, car" size="18"></label>
@@ -165,7 +166,7 @@
       <div class="annotator-body">
         <div class="annotator-stage" id="annStage">
           <div class="ann-canvas" id="annCanvas">
-            <img class="ann-base" id="annBaseImg" alt="标注图">
+            <img class="ann-base" id="annBaseImg" alt="标注图" draggable="false">
             <div class="ann-boxes" id="annBoxes"></div>
           </div>
           <div class="ann-msg" id="annMsg"></div>
@@ -197,6 +198,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=25"></script>
+<script src="/app.js?v=32"></script>
 </body>
 </html>

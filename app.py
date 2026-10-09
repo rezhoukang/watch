@@ -399,6 +399,27 @@ def dataset_detail(name: str) -> dict:
     return vision.dataset_detail(ds_dir)
 
 
+@app.put("/api/datasets/{name}/classes", summary="改写数据集类别名")
+def write_dataset_classes(name: str, payload: dict) -> dict:
+    """body: {"classes": ["person", "flag", ...]}
+
+    只改名字，class_id（行号）不变，所以已有 label 文件不用重写；
+    后端会一并同步 data.yaml 的 nc/names 并删掉训练标注缓存。
+    """
+    ds_dir = vision.DATASETS_DIR / name
+    if not ds_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"数据集不存在：{name}")
+    names = payload.get("classes")
+    if not isinstance(names, list):
+        raise HTTPException(status_code=400, detail="classes 必须是数组")
+    try:
+        saved = vision.write_dataset_classes(ds_dir, names)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    logger.info("数据集 %s 的类别已更新：%s", name, saved)
+    return {"ok": True, "classes": saved}
+
+
 # ---------- 标注（训练数据准备）----------
 # 注意：filename 形如 <数据集>/<split>/<图片名>，含斜杠，所以用 {filename:path}
 # 与推理共用同一套权重选项（conf/weights/classes/imgsz）。
