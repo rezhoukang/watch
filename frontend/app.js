@@ -117,7 +117,9 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
     if (name === 'detect') loadImages();
     if (name === 'video') loadVideos();
-    if (name === 'train') loadDatasets();
+    if (name === 'train') {
+      loadDatasets().then(loadAnnotateGrid);
+    }
   });
 });
 
@@ -166,11 +168,12 @@ async function loadEnv() {
     const all = s.models.length ? s.models : [DEFAULT_MODEL];
     fillSelect('detWeights', all, DEFAULT_MODEL);   // 图片检测：全部模型
     fillSelect('vidWeights', all, DEFAULT_MODEL);   // 视频检测：全部模型
-    // 训练：排除 World 权重（训练走普通 YOLO 流程，喂 World 权重会失败）
-    fillSelect('trainWeights', all.filter((m) => !WORLD_MODELS.includes(m)), DEFAULT_MODEL);
+    fillSelect('trainWeights', all, DEFAULT_MODEL); // 训练：全部模型（含 World，迁移起点与推理一致）
+    fillSelect('annWeights', all, DEFAULT_MODEL);   // 标注器：全部模型（与推理一致）
 
     syncModeUi('detWeights', 'detClassesWrap');
     syncModeUi('vidWeights', 'vidClassesWrap');
+    syncModeUi('annWeights', 'annClassesWrap');
   } catch (e) {
     badge.textContent = '状态获取失败：' + (e instanceof Error ? e.message : String(e));
     badge.className = 'badge err';
@@ -183,6 +186,9 @@ el('detWeights').addEventListener('change', () =>
 );
 el('vidWeights').addEventListener('change', () =>
   syncModeUi('vidWeights', 'vidClassesWrap')
+);
+el('annWeights').addEventListener('change', () =>
+  syncModeUi('annWeights', 'annClassesWrap')
 );
 
 /** 读取当前检测设置（图片/视频共用） */
@@ -1139,12 +1145,15 @@ loadOutputs();
 async function loadDatasets() {
   const box = el('datasetList');
   const sel = el('trainDataset');
+  const annSel = el('annotateDataset');
   try {
     const data = await api('/api/datasets');
     sel.innerHTML = '';
+    annSel.innerHTML = '';
     if (!data.datasets.length) {
       box.innerHTML = '<div class="empty">暂无数据集</div>';
       sel.innerHTML = '<option value="">（无数据集）</option>';
+      annSel.innerHTML = '<option value="">（无数据集）</option>';
       return;
     }
     box.innerHTML = '';
@@ -1156,10 +1165,12 @@ async function loadDatasets() {
         `<span class="meta">${esc(d.images)} 张图片${d.has_yaml ? ' · 已有 yaml' : ''}</span>`;
       box.appendChild(item);
 
-      const o = document.createElement('option');
-      o.value = d.name;
-      o.textContent = d.name;
-      sel.appendChild(o);
+      for (const s of [sel, annSel]) {
+        const o = document.createElement('option');
+        o.value = d.name;
+        o.textContent = d.name;
+        s.appendChild(o);
+      }
     });
   } catch (e) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e instanceof Error ? e.message : String(e))}</div>`;
@@ -1218,6 +1229,469 @@ el('trainBtn').addEventListener('click', async () => {
   } catch (err) {
     showError(box, err, '训练启动失败');
   }
+});
+
+/* ==================== 标注（全屏标注器）====================
+ * 入口：训练页「标注数据」区选数据集 + Train/Val → 点缩略图进入全屏标注器。
+ * 能力：预标注（用与推理一致的权重选项）→ 框/点两种显示 → 改框（拖动/缩放）/
+ *       改类别 / 删框 / 画新框 → 保存为 YOLO label。
+ */
+
+let ANN = null;   // 当前标注会话
+
+/** 缩略图网格：列出数据集某子集的图片 + 已标注状态 */
+async function loadAnnotateGrid() {
+  const grid = el('annotateGrid');
+  const stat = el('annotateStat');
+  const ds = el('annotateDataset').value;
+  const split = el('annotateSplit').value;
+
+  if (!ds) {
+    grid.innerHTML = '<div class="empty">暂无数据集</div>';
+    stat.textContent = '';
+    return;
+  }
+
+  grid.innerHTML = '<div class="empty">加载中…</div>';
+  try {
+    const data = await api(`/api/datasets/${encodeURIComponent(ds)}`, {}, 20000);
+    const sub = (data.subsets && data.subsets[split]) || null;
+    if (!sub || !sub.count) {
+      grid.innerHTML = `<div class="empty">该子集没有图片（${esc(ds)}/images/${esc(split)}）</div>`;
+      stat.textContent = '';
+      return;
+    }
+    stat.textContent = `${sub.count} 张 · 已标注 ${sub.labeled} 张 · ${(data.classes || []).length} 类`;
+
+    // 已标注状态按需读取（点开图片后才知），这里只列缩略图
+    grid.innerHTML = '';
+    sub.files.forEach((f) => {
+      const fig = document.createElement('figure');
+      fig.title = '点击进入全屏标注：' + f;
+      fig.innerHTML =
+        `<img src="/api/annotate/raw/${encodeURIComponent(ds)}/${encodeURIComponent(split)}/${encodeURIComponent(f)}" alt="" loading="lazy">` +
+        `<figcaption>${esc(f)}</figcaption>`;
+      fig.addEventListener('click', () => openAnnotator(ds, split, f));
+      grid.appendChild(fig);
+    });
+  } catch (e) {
+    grid.innerHTML = `<div class="empty">加载失败：${esc(e instanceof Error ? e.message : String(e))}</div>`;
+  }
+}
+
+el('annotateDataset').addEventListener('change', loadAnnotateGrid);
+el('annotateSplit').addEventListener('change', loadAnnotateGrid);
+el('refreshAnnotate').addEventListener('click', loadAnnotateGrid);
+
+/** 打开全屏标注器，载入该图片的现有标注 */
+async function openAnnotator(ds, split, filename) {
+  const mask = el('annotatorMask');
+  const rel = `${ds}/${split}/${filename}`;
+
+  ANN = {
+    rel,
+    dsClasses: [],
+    dets: [],          // [{class_id, class_name, confidence, bbox:[x1,y1,x2,y2]}]
+    active: -1,        // 当前选中框
+    shape: 'box',      // 'box' | 'dot'
+    naturalW: 1,
+    naturalH: 1,
+    filter: null,      // 只看某一类（null = 全部）
+    confMin: 0,
+    dirty: false,
+  };
+
+  mask.hidden = false;
+  el('annotatorTitle').textContent = filename;
+  el('annotatorSub').textContent = `${ds} / ${split}`;
+  el('annList').innerHTML = '';
+  el('annClassesList').innerHTML = '';
+  el('annCount').textContent = '';
+  annMsg('载入中…');
+
+  // 先把图片地址写上（立即开始加载）
+  const img = el('annBaseImg');
+  img.src = `/api/annotate/raw/${encodeURIComponent(ds)}/${encodeURIComponent(split)}/${encodeURIComponent(filename)}`;
+
+  try {
+    const data = await api(
+      `/api/annotate/image/${encodeURIComponent(ds)}/${encodeURIComponent(split)}/${encodeURIComponent(filename)}`,
+      {},
+      60000
+    );
+    ANN.dsClasses = data.classes || [];
+    ANN.dets = (data.detections || []).map((d) => ({
+      class_id: d.class_id,
+      class_name: d.class_name,
+      confidence: d.confidence,
+      bbox: d.bbox.slice(),
+    }));
+    ANN.naturalW = data.width || 1;
+    ANN.naturalH = data.height || 1;
+
+    // 图片加载完后按真实尺寸画框（百分比定位）
+    const onReady = () => {
+      ANN.naturalW = img.naturalWidth || ANN.naturalW;
+      ANN.naturalH = img.naturalHeight || ANN.naturalH;
+      paintAnn();
+    };
+    if (img.complete && img.naturalWidth) onReady();
+    else img.addEventListener('load', onReady, { once: true });
+
+    paintAnnClasses();
+    paintAnn();
+    annMsg('');
+  } catch (e) {
+    annMsg(`载入失败：${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** 顶部提示条 */
+function annMsg(text) {
+  el('annMsg').textContent = text || '';
+}
+
+/** 左侧类别筛选列表 */
+function paintAnnClasses() {
+  const box = el('annClassesList');
+  box.innerHTML = '';
+  ANN.dsClasses.forEach((name, i) => {
+    const b = document.createElement('button');
+    b.className = 'ann-class';
+    b.style.setProperty('--c', classColor(i));
+    b.textContent = name;
+    b.title = '单击：只看这一类（再次点击取消）';
+    b.classList.toggle('active', ANN.filter === i);
+    b.addEventListener('click', () => {
+      ANN.filter = ANN.filter === i ? null : i;
+      paintAnnClasses();
+      paintAnn();
+    });
+    box.appendChild(b);
+  });
+}
+
+/** 类别 → 颜色（与检测结果页同一套黄金角取色） */
+function annClassColor(clsId, name) {
+  let idx = clsId;
+  if (typeof idx !== 'number' || idx < 0) {
+    idx = ANN.dsClasses.indexOf(name);
+  }
+  return classColor(idx < 0 ? 0 : idx);
+}
+
+/** 重画所有标注框（框/点两种形式）+ 左侧列表 */
+function paintAnn() {
+  if (!ANN) return;
+  const wrap = el('annBoxes');
+  wrap.innerHTML = '';
+
+  const pct = (v, total) => `${(v / total) * 100}%`;
+  const visible = [];
+
+  ANN.dets.forEach((d, i) => {
+    if (ANN.filter !== null && d.class_id !== ANN.filter) return;
+    visible.push(i);
+
+    const [x1, y1, x2, y2] = d.bbox;
+    const color = annClassColor(d.class_id, d.class_name);
+    const node = document.createElement('div');
+    node.className = 'ann-box' + (ANN.active === i ? ' active' : '');
+    node.dataset.i = String(i);
+    node.style.setProperty('--c', color);
+    node.style.left = pct(x1, ANN.naturalW);
+    node.style.top = pct(y1, ANN.naturalH);
+    node.style.width = pct(x2 - x1, ANN.naturalW);
+    node.style.height = pct(y2 - y1, ANN.naturalH);
+
+    // 类别标签（下拉可改）
+    const sel = document.createElement('select');
+    sel.className = 'ann-cls-select';
+    ANN.dsClasses.forEach((name, ci) => {
+      const o = document.createElement('option');
+      o.value = String(ci);
+      o.textContent = name;
+      if (ci === d.class_id) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', (ev) => {
+      ev.stopPropagation();
+      d.class_id = Number(sel.value);
+      d.class_name = ANN.dsClasses[d.class_id] || String(d.class_id);
+      ANN.dirty = true;
+      paintAnn();
+    });
+    sel.addEventListener('mousedown', (ev) => ev.stopPropagation());
+
+    // 删除按钮
+    const del = document.createElement('button');
+    del.className = 'ann-del';
+    del.type = 'button';
+    del.textContent = '×';
+    del.title = '删除这个标注';
+    del.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ANN.dets.splice(i, 1);
+      ANN.active = -1;
+      ANN.dirty = true;
+      paintAnn();
+    });
+    del.addEventListener('mousedown', (ev) => ev.stopPropagation());
+
+    node.appendChild(sel);
+    node.appendChild(del);
+
+    if (ANN.shape === 'dot') {
+      // 点模式：中心画一个点，框用虚线淡显
+      node.classList.add('as-dot');
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      const dot = document.createElement('i');
+      dot.className = 'ann-dot';
+      dot.style.left = pct(cx, ANN.naturalW);
+      dot.style.top = pct(cy, ANN.naturalH);
+      node.appendChild(dot);
+    } else {
+      // 框模式：四个角把手用于缩放
+      ['nw', 'ne', 'sw', 'se'].forEach((pos) => {
+        const h = document.createElement('span');
+        h.className = `ann-handle ${pos}`;
+        h.dataset.handle = pos;
+        node.appendChild(h);
+      });
+    }
+
+    node.addEventListener('mousedown', (ev) => startAnnDrag(ev, i, node, 'move'));
+    node.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      ANN.active = i;
+      paintAnn();
+    });
+
+    wrap.appendChild(node);
+  });
+
+  el('annCount').textContent = `${visible.length}/${ANN.dets.length}`;
+  el('annDeleteAll').disabled = !ANN.dets.length;
+  el('annSave').textContent = ANN.dirty ? '保存 *' : '保存';
+}
+
+/** 在图片上拖拽：移动已有框 / 拖角缩放 / 空白处画新框 */
+function startAnnDrag(ev, i, node, mode) {
+  ev.preventDefault();
+  ev.stopPropagation();
+
+  const rect = el('annCanvas').getBoundingClientRect();
+  const sx = ANN.naturalW / rect.width;
+  const sy = ANN.naturalH / rect.height;
+  const startX = (ev.clientX - rect.left) * sx;
+  const startY = (ev.clientY - rect.top) * sy;
+  const handle = ev.target.closest('.ann-handle');
+  const box = ANN.dets[i];
+  const orig = box.bbox.slice();
+
+  const onMove = (e) => {
+    const mx = (e.clientX - rect.left) * sx;
+    const my = (e.clientY - rect.top) * sy;
+    const dx = mx - startX;
+    const dy = my - startY;
+
+    if (handle && mode === 'move') {
+      // 拖角缩放
+      const pos = handle.dataset.handle;
+      let [x1, y1, x2, y2] = orig;
+      if (pos.includes('w')) x1 = Math.min(orig[0] + dx, x2 - 2);
+      if (pos.includes('e')) x2 = Math.max(orig[2] + dx, x1 + 2);
+      if (pos.includes('n')) y1 = Math.min(orig[1] + dy, y2 - 2);
+      if (pos.includes('s')) y2 = Math.max(orig[3] + dy, y1 + 2);
+      box.bbox = [clamp(x1, 0, ANN.naturalW), clamp(y1, 0, ANN.naturalH), clamp(x2, 0, ANN.naturalW), clamp(y2, 0, ANN.naturalH)];
+    } else {
+      // 整体移动
+      const w = orig[2] - orig[0];
+      const h = orig[3] - orig[1];
+      const nx = clamp(orig[0] + dx, 0, ANN.naturalW - w);
+      const ny = clamp(orig[1] + dy, 0, ANN.naturalH - h);
+      box.bbox = [nx, ny, nx + w, ny + h];
+    }
+    ANN.dirty = true;
+    paintAnn();
+  };
+
+  const onUp = () => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+/** 空白处按下 → 画新框 */
+function startAnnDraw(ev) {
+  if (!ANN || ev.target.closest('.ann-box')) return;
+  const rect = el('annCanvas').getBoundingClientRect();
+  const sx = ANN.naturalW / rect.width;
+  const sy = ANN.naturalH / rect.height;
+  const x0 = clamp((ev.clientX - rect.left) * sx, 0, ANN.naturalW);
+  const y0 = clamp((ev.clientY - rect.top) * sy, 0, ANN.naturalH);
+
+  const temp = document.createElement('div');
+  temp.className = 'ann-box drawing';
+  el('annBoxes').appendChild(temp);
+
+  const onMove = (e) => {
+    const x1 = clamp((e.clientX - rect.left) * sx, 0, ANN.naturalW);
+    const y1 = clamp((e.clientY - rect.top) * sy, 0, ANN.naturalH);
+    temp.style.left = `${(Math.min(x0, x1) / ANN.naturalW) * 100}%`;
+    temp.style.top = `${(Math.min(y0, y1) / ANN.naturalH) * 100}%`;
+    temp.style.width = `${(Math.abs(x1 - x0) / ANN.naturalW) * 100}%`;
+    temp.style.height = `${(Math.abs(y1 - y0) / ANN.naturalH) * 100}%`;
+  };
+  onMove(ev);
+
+  const onUp = (e) => {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    temp.remove();
+
+    const x1 = clamp((e.clientX - rect.left) * sx, 0, ANN.naturalW);
+    const y1 = clamp((e.clientY - rect.top) * sy, 0, ANN.naturalH);
+    const bx1 = Math.min(x0, x1);
+    const by1 = Math.min(y0, y1);
+    const bx2 = Math.max(x0, x1);
+    const by2 = Math.max(y0, y1);
+    // 太小的框视为误触，丢弃
+    if (bx2 - bx1 < 4 || by2 - by1 < 4) return;
+
+    const cid = ANN.filter !== null ? ANN.filter : 0;
+    ANN.dets.push({
+      class_id: cid,
+      class_name: ANN.dsClasses[cid] || String(cid),
+      confidence: null,
+      bbox: [bx1, by1, bx2, by2],
+    });
+    ANN.active = ANN.dets.length - 1;
+    ANN.dirty = true;
+    paintAnn();
+  };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function clamp(v, lo, hi) {
+  return Math.max(lo, Math.min(v, hi));
+}
+
+el('annCanvas').addEventListener('mousedown', startAnnDraw);
+
+/** 显示形式切换：框 / 中心点 */
+document.querySelectorAll('#annShape .seg-btn').forEach((b) => {
+  b.addEventListener('click', () => {
+    if (!ANN) return;
+    ANN.shape = b.dataset.shape || 'box';
+    document
+      .querySelectorAll('#annShape .seg-btn')
+      .forEach((x) => x.classList.toggle('active', x === b));
+    paintAnn();
+  });
+});
+
+/** 预标注：调后端检测，把结果直接变成标注框 */
+el('annPrelabel').addEventListener('click', async () => {
+  if (!ANN) return;
+  const btn = el('annPrelabel');
+  btn.disabled = true;
+  annMsg('预标注中…（首次要加载模型，可能较慢）');
+  try {
+    const { weights, classes } = readDetectOptions('ann');
+    const q = new URLSearchParams({
+      conf: el('annConf').value || '0.25',
+      weights,
+      imgsz: '640',
+    });
+    if (classes) q.set('classes', classes);
+
+    const res = await api(
+      `/api/annotate/prelabel/${ANN.rel}?${q}`,
+      { method: 'POST' },
+      300000
+    );
+    const dets = (res.detections || []).map((d) => ({
+      class_id: d.class_id,
+      class_name: d.class_name,
+      confidence: d.confidence,
+      bbox: d.bbox.slice(),
+    }));
+    // 预标注可能给数据集追加了新类别（如 COCO 的 chair），刷新左侧类别列表
+    if (Array.isArray(res.classes) && res.classes.length) {
+      ANN.dsClasses = res.classes;
+      ANN.filter = null;
+      paintAnnClasses();
+    }
+    ANN.dets = dets;
+    ANN.active = -1;
+    ANN.dirty = true;
+    paintAnn();
+    annMsg(`预标注完成：${dets.length} 个目标（改完记得保存）`);
+  } catch (e) {
+    annMsg(`预标注失败：${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/** 清空全部标注 */
+el('annDeleteAll').addEventListener('click', () => {
+  if (!ANN || !ANN.dets.length) return;
+  if (!confirm(`清空这 ${ANN.dets.length} 个标注？`)) return;
+  ANN.dets = [];
+  ANN.active = -1;
+  ANN.dirty = true;
+  paintAnn();
+});
+
+/** 保存为 YOLO label */
+el('annSave').addEventListener('click', async () => {
+  if (!ANN) return;
+  const btn = el('annSave');
+  btn.disabled = true;
+  annMsg('保存中…');
+  try {
+    const res = await api(
+      `/api/annotate/save/${ANN.rel}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          detections: ANN.dets.map((d) => ({ class_id: d.class_id, bbox: d.bbox })),
+        }),
+      },
+      60000
+    );
+    ANN.dirty = false;
+    paintAnn();
+    annMsg(`已保存 ${res.count} 个标注 → ${res.label}`);
+    loadAnnotateGrid();   // 刷新网格里的已标注数量
+  } catch (e) {
+    annMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/** 关闭标注器（有未保存改动时提示） */
+function closeAnnotator() {
+  if (ANN && ANN.dirty && !confirm('有未保存的改动，确定关闭吗？')) return;
+  el('annotatorMask').hidden = true;
+  el('annBaseImg').src = '';
+  ANN = null;
+}
+el('annClose').addEventListener('click', closeAnnotator);
+el('annotatorMask').addEventListener('click', (ev) => {
+  // 点遮罩空白处 = 关闭；点标注器内部不关
+  if (ev.target === el('annotatorMask')) closeAnnotator();
+});
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && ANN) closeAnnotator();
 });
 
 /* ==================== 通用：轮询后台任务 ====================

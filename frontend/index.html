@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=20">
+<link rel="stylesheet" href="/style.css?v=21">
 </head>
 <body>
 <div class="app">
@@ -125,7 +125,64 @@
         <div id="trainResult" class="result-box"></div>
       </div>
     </div>
+    <div class="annotate">
+      <h2>标注数据
+        <button class="btn small ghost" id="refreshAnnotate">刷新</button>
+      </h2>
+      <div class="annotate-bar">
+        <label>数据集 <select id="annotateDataset"></select></label>
+        <label>子集 <select id="annotateSplit">
+          <option value="train">Train（训练集）</option>
+          <option value="val">Val（验证集）</option>
+        </select></label>
+        <span class="annotate-stat" id="annotateStat"></span>
+        <span class="annotate-tip">点图片进入全屏标注 → 预标注 → 改框/加框 → 保存</span>
+      </div>
+      <div id="annotateGrid" class="grid"></div>
+    </div>
   </section>
+
+  <!-- ========== 全屏标注器 ========== -->
+  <div class="annotator-mask" id="annotatorMask" hidden>
+    <div class="annotator">
+      <header class="annotator-head">
+        <span class="annotator-title" id="annotatorTitle"></span>
+        <span class="annotator-sub" id="annotatorSub"></span>
+        <div class="annotator-head-actions">
+          <div class="seg" id="annShape">
+            <button class="seg-btn active" data-shape="box">框</button>
+            <button class="seg-btn" data-shape="dot">中心点</button>
+          </div>
+          <label>置信度 <input type="number" id="annConf" value="0.25" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
+          <label>模型 <select id="annWeights"></select></label>
+          <label id="annClassesWrap" hidden>prompt <input type="text" id="annClasses" value="person" placeholder="person, car" size="18"></label>
+          <button class="btn small" id="annPrelabel">预标注</button>
+          <button class="btn small danger" id="annDeleteAll">清空</button>
+          <button class="btn small ghost" id="annSave">保存</button>
+          <button class="btn small ghost" id="annClose">关闭</button>
+        </div>
+      </header>
+      <div class="annotator-body">
+        <div class="annotator-stage" id="annStage">
+          <div class="ann-canvas" id="annCanvas">
+            <img class="ann-base" id="annBaseImg" alt="标注图">
+            <div class="ann-boxes" id="annBoxes"></div>
+          </div>
+          <div class="ann-msg" id="annMsg"></div>
+        </div>
+        <aside class="annotator-side">
+          <div class="ann-side-block">
+            <h3>类别</h3>
+            <div id="annClassesList" class="ann-classes"></div>
+          </div>
+          <div class="ann-side-block">
+            <h3>标注 <span id="annCount"></span></h3>
+            <div id="annList" class="ann-list"></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
 
   <footer class="foot">
     <a href="/docs" target="_blank">API 文档</a>
@@ -140,6 +197,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=24"></script>
+<script src="/app.js?v=25"></script>
 </body>
 </html>

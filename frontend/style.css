@@ -604,3 +604,215 @@ input[type="number"] { width: 88px; }
   .row, .split { grid-template-columns: 1fr; }
 }
 
+/* ==================== 标注数据区（训练页）==================== */
+.annotate { margin-top: 22px; }
+.annotate h2 { display: flex; align-items: center; gap: 10px; }
+.annotate-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #5f6368;
+}
+.annotate-bar label { display: flex; align-items: center; gap: 6px; }
+.annotate-stat { color: #1a73e8; font-weight: 600; }
+.annotate-tip { margin-left: auto; font-size: 12px; color: #9aa0a6; }
+.annotate .grid figure { cursor: pointer; }
+
+/* ==================== 全屏标注器 ==================== */
+.annotator-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(20, 22, 26, .72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.annotator-mask[hidden] { display: none; }
+.annotator {
+  width: 100%;
+  height: 100%;
+  background: #f6f7f9;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .4);
+}
+.annotator-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #fff;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e4e6eb;
+}
+.annotator-title { font-size: 14px; font-weight: 600; color: #202124; }
+.annotator-sub { font-size: 12px; color: #80868b; }
+.annotator-head-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #5f6368;
+}
+.annotator-head-actions label { display: flex; align-items: center; gap: 5px; }
+
+.annotator-body { flex: 1; display: flex; min-height: 0; }
+.annotator-stage {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 14px;
+  min-width: 0;
+}
+/* 画布：尺寸 = 图片显示尺寸（框层用百分比定位，必须严格贴合图片） */
+.ann-canvas { position: relative; line-height: 0; max-width: 100%; max-height: 100%; }
+.annotator-stage img.ann-base {
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  border-radius: 6px;
+  user-select: none;
+  -webkit-user-drag: none;
+  cursor: crosshair;
+}
+.ann-boxes { position: absolute; inset: 0; pointer-events: none; }
+.ann-box {
+  position: absolute;
+  border: 2px solid var(--c, #1a73e8);
+  border-radius: 2px;
+  box-sizing: border-box;
+  pointer-events: auto;
+  cursor: move;
+}
+.ann-box.active {
+  border-width: 3px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .95), 0 0 8px rgba(26, 115, 232, .6);
+  z-index: 4;
+}
+.ann-box.drawing {
+  border-style: dashed;
+  background: rgba(26, 115, 232, .12);
+  pointer-events: none;
+}
+/* 点模式：框淡显，中心点突出 */
+.ann-box.as-dot { border-style: dashed; opacity: .55; }
+.ann-box .ann-dot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--c, #1a73e8);
+  border: 2px solid #fff;
+  box-shadow: 0 0 5px rgba(0, 0, 0, .6);
+  pointer-events: none;
+}
+/* 缩放把手（仅框模式） */
+.ann-handle {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: #fff;
+  border: 1.5px solid var(--c, #1a73e8);
+  border-radius: 2px;
+}
+.ann-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.ann-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.ann-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.ann-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+/* 框上的类别下拉 + 删除 */
+.ann-cls-select {
+  position: absolute;
+  left: -2px;
+  top: -22px;
+  max-width: 130px;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 1px 3px;
+  border: 1px solid var(--c, #1a73e8);
+  border-radius: 3px;
+  background: var(--c, #1a73e8);
+  color: #fff;
+  cursor: pointer;
+}
+.ann-del {
+  position: absolute;
+  right: -10px;
+  top: -12px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  background: #c5221f;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.ann-msg {
+  position: absolute;
+  left: 22px;
+  bottom: 22px;
+  background: rgba(32, 33, 36, .86);
+  color: #fff;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  max-width: 70%;
+}
+.ann-msg:empty { display: none; }
+
+/* 右侧栏 */
+.annotator-side {
+  width: 240px;
+  flex: 0 0 240px;
+  background: #fff;
+  border-left: 1px solid #e4e6eb;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ann-side-block h3 {
+  font-size: 12px;
+  color: #5f6368;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 8px;
+}
+.ann-classes { display: flex; flex-wrap: wrap; gap: 6px; }
+.ann-class {
+  border: 1px solid var(--c, #1a73e8);
+  background: #fff;
+  color: var(--c, #1a73e8);
+  border-radius: 14px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.ann-class.active { background: var(--c, #1a73e8); color: #fff; }
+
+@media (max-width: 860px) {
+  .annotator-side { width: 170px; flex-basis: 170px; }
+}
+

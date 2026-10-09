@@ -225,11 +225,13 @@ def detect_image(
     conf: float = 0.25,
     classes: list[str] | None = None,
     imgsz: int = 640,
+    save_result: bool = True,
 ) -> dict:
     """检测单张图片，保存带框结果，返回检测详情
 
     classes: 仅对 World 模型生效；为空则使用权重内置类别
     imgsz:   推理分辨率（会钳制到 320~1920 并对齐 32 的倍数）
+    save_result: False 时不写结果图（预标注用，避免污染 results/）
     """
     _ensure_dirs()
     import cv2
@@ -244,12 +246,14 @@ def detect_image(
     # 保存带框结果图
     # cv2.imwrite 在 Windows 下遇到中文路径会静默失败（内部用窄字符 fopen），
     # 所以走 imencode + tofile 写字节，保证「东教室阶梯.png」这类文件名也能存。
-    out_name = f"{src.stem}_det{src.suffix}"
-    out_path = RESULTS_DIR / out_name
-    ok, buf = cv2.imencode(out_path.suffix, r.plot())
-    if not ok:
-        raise RuntimeError(f"结果图编码失败：{out_name}")
-    buf.tofile(str(out_path))
+    out_name = ""
+    if save_result:
+        out_name = f"{src.stem}_det{src.suffix}"
+        out_path = RESULTS_DIR / out_name
+        ok, buf = cv2.imencode(out_path.suffix, r.plot())
+        if not ok:
+            raise RuntimeError(f"结果图编码失败：{out_name}")
+        buf.tofile(str(out_path))
 
     names = r.names
     orig_h, orig_w = r.orig_shape
@@ -287,8 +291,8 @@ def detect_image(
 
     return {
         "source": src.name,
-        "result": out_name,
-        "result_url": f"/results/{out_name}",
+        "result": out_name if save_result else "",
+        "result_url": f"/results/{out_name}" if save_result else "",
         "image_width": int(orig_w),
         "image_height": int(orig_h),
         "imgsz": size,
@@ -549,6 +553,255 @@ def list_datasets() -> list[dict]:
             }
         )
     return out
+
+
+# ---------- 标注（训练数据准备）----------
+def dataset_detail(ds_dir: Path) -> dict:
+    """数据集的 Train/Val 子集详情：图片清单 + 标注统计"""
+    names = dataset_classes(ds_dir)
+    out = {
+        "name": ds_dir.name,
+        "classes": names,
+        "subsets": {},
+    }
+    for split in ("train", "val"):
+        img_dir = ds_dir / "images" / split
+        if not img_dir.is_dir():
+            continue
+        files = sorted(p.name for p in img_dir.iterdir() if p.suffix.lower() in IMAGE_EXTENSIONS)
+        label_dir = ds_dir / "labels" / split
+        labeled = sum(
+            1 for f in files if (label_dir / Path(f).with_suffix(".txt").name).exists()
+        )
+        out["subsets"][split] = {
+            "count": len(files),
+            "labeled": labeled,
+            "files": files,
+        }
+    return out
+
+
+def resolve_annotate_image(filename: str) -> Path:
+    """把 <数据集>/<split>/<图片名> 解析为数据集里的绝对路径（防目录穿越）
+
+    图片所在目录决定 split 与标签目录。
+    """
+    parts = [p for p in Path(filename).parts if p not in ("", ".", "..")]
+    if len(parts) < 2:
+        raise ValueError("图片路径格式应为 <数据集>/<split>/<图片名>")
+    ds_name = parts[0]
+    img_name = parts[-1]
+    ds_dir = DATASETS_DIR / ds_name
+    if not ds_dir.is_dir():
+        raise ValueError(f"数据集不存在：{ds_name}")
+    # 只允许 images/{train,val} 下的图片
+    candidates = []
+    for split in ("train", "val"):
+        p = ds_dir / "images" / split / img_name
+        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS:
+            candidates.append(p)
+    if not candidates:
+        raise ValueError(f"图片不存在：{filename}")
+    return candidates[0]
+
+
+def split_of(img_path: Path) -> str:
+    """由图片路径反推 split（train/val）"""
+    try:
+        return img_path.parent.name
+    except Exception:  # noqa: BLE001
+        return "train"
+
+
+def find_dataset_dir(img_path: Path) -> Path:
+    """由图片路径向上找到数据集根目录（含 data.yaml / classes.txt 的那层）"""
+    d = img_path.parent
+    while d != d.parent:
+        if (d / "images").is_dir() or (d / "labels").is_dir():
+            return d
+        d = d.parent
+    return DATASETS_DIR / img_path.parts[-3]
+
+
+def dataset_classes(ds_dir: Path) -> list[str]:
+    """数据集的类别清单（classes.txt 优先）"""
+    return _read_classes(ds_dir)
+
+
+def append_dataset_classes(ds_dir: Path, names: list[str]) -> list[str]:
+    """把新类别追加到 classes.txt 末尾（不影响已有类别的 id），返回更新后的清单
+
+    预标注时模型可能检出数据集里还没有的类别（如 COCO 的 chair）。
+    直接追加而不重排，保证已有 label 的 class_id 不会错位。
+    names 内部的重复项会被去重（同一张图可能检出多个同类目标）。
+    """
+    merged = dataset_classes(ds_dir)
+    added = False
+    for n in names:
+        if n and n not in merged:
+            merged.append(n)
+            added = True
+    if added:
+        (ds_dir / "classes.txt").write_text("\n".join(merged) + "\n", encoding="utf-8")
+        _sync_data_yaml(ds_dir, merged)
+        _invalidate_label_cache(ds_dir)
+    return merged
+
+
+def _sync_data_yaml(ds_dir: Path, names: list[str]) -> None:
+    """classes.txt 变了就同步 data.yaml 的 nc / names
+
+    数据集若自带 data.yaml，它的 nc/names 是写死的 —— 不同步的话，
+    标注器新增的类别训练时看不到，还会因 class_id 越界而报错。
+    """
+    yaml_path = ds_dir / "data.yaml"
+    if not yaml_path.is_file():
+        return
+    try:
+        import yaml
+
+        data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            return
+        raw = data.get("names")
+        cur = list(raw.values()) if isinstance(raw, dict) else list(raw or [])
+        if data.get("nc") == len(names) and cur == names:
+            return
+        data["nc"] = len(names)
+        data["names"] = {i: n for i, n in enumerate(names)}
+        yaml_path.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001
+        pass   # yaml 缺失/损坏时不阻塞标注流程
+
+
+def _invalidate_label_cache(ds_dir: Path) -> None:
+    """删掉 ultralytics 的标注扫描缓存（*.cache）
+
+    必须删：缓存 hash 只由「标签路径列表 + 图片路径列表 + 扫描参数」算出，
+    **不含文件内容也不含 mtime**。所以改了标注内容却不删缓存时，
+    训练会静默复用旧标签 —— 不报错，但用的是过期数据。
+    缓存路径规则见 ultralytics YOLODataset.get_labels：
+        Path(label_files[0]).parent.with_suffix(".cache")  →  labels/<split>.cache
+    """
+    labels_dir = ds_dir / "labels"
+    targets = [labels_dir.with_suffix(".cache")]           # labels.cache
+    targets += [(labels_dir / s).with_suffix(".cache") for s in ("train", "val")]
+    for cache in targets:
+        try:
+            cache.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def read_labels_for_image(img_path: Path) -> dict:
+    """读一张图片已有的 YOLO 标注（相对 <数据集>/images/<split>/），还原为原图像素"""
+    ds_dir = find_dataset_dir(img_path)
+    split = split_of(img_path)
+    label_path = ds_dir / "labels" / split / Path(img_path.name).with_suffix(".txt")
+    img_w, img_h = _image_size(img_path)
+    names = dataset_classes(ds_dir)
+    dets = []
+    if label_path.is_file():
+        for ln in label_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            parts = ln.split()
+            if len(parts) < 5:
+                continue
+            try:
+                cls = int(parts[0])
+                cx, cy, w, h = (float(v) for v in parts[1:5])
+            except ValueError:
+                continue
+            dets.append(
+                {
+                    "class_id": cls,
+                    "class_name": names[cls] if cls < len(names) else str(cls),
+                    "confidence": None,
+                    "bbox": [
+                        round((cx - w / 2) * img_w, 2),
+                        round((cy - h / 2) * img_h, 2),
+                        round((cx + w / 2) * img_w, 2),
+                        round((cy + h / 2) * img_h, 2),
+                    ],
+                }
+            )
+    return {"width": img_w, "height": img_h, "detections": dets}
+
+
+def _image_size(img_path: Path) -> tuple[int, int]:
+    """读图片宽高（失败回退 1x1，避免除零）
+
+    不能用裸 cv2.imread：Windows 下遇到中文路径会静默返回 None，
+    会让标注坐标全部按 1x1 换算而错乱。改用 np.fromfile + cv2.imdecode 读字节。
+    """
+    try:
+        import cv2
+        import numpy as np
+
+        buf = np.fromfile(str(img_path), dtype=np.uint8)
+        img = cv2.imdecode(buf, cv2.IMREAD_COLOR)  # type: ignore[attr-defined]
+        if img is not None:
+            h, w = img.shape[:2]
+            return int(w), int(h)
+    except Exception:  # noqa: BLE001
+        pass
+    return 1, 1
+
+
+def save_labels_for_image(img_path: Path, dets: list[dict]) -> tuple[int, str]:
+    """把前端标注写回 YOLO 归一化 label 文件，返回 (目标数, 相对 label 路径)"""
+    ds_dir = find_dataset_dir(img_path)
+    split = split_of(img_path)
+    img_w, img_h = _image_size(img_path)
+    if img_w <= 0 or img_h <= 0:
+        raise RuntimeError("无法读取图片尺寸，保存失败")
+
+    lines = []
+    saved = 0
+    for d in dets:
+        try:
+            cid = int(d.get("class_id", 0))
+        except (TypeError, ValueError):
+            continue
+        bb = d.get("bbox")
+        if not isinstance(bb, (list, tuple)) or len(bb) < 4:
+            continue
+        x1, y1, x2, y2 = (float(v) for v in bb[:4])
+        x1, x2 = sorted((x1, x2))
+        y1, y2 = sorted((y1, y2))
+        if x2 - x1 < 1 or y2 - y1 < 1:
+            continue
+        cx = (x1 + x2) / 2 / img_w
+        cy = (y1 + y2) / 2 / img_h
+        w = (x2 - x1) / img_w
+        h = (y2 - y1) / img_h
+        lines.append(f"{cid} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+        saved += 1
+
+    label_dir = ds_dir / "labels" / split
+    label_dir.mkdir(parents=True, exist_ok=True)
+    label_path = label_dir / Path(img_path.name).with_suffix(".txt")
+    label_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+    # 关键：删掉 ultralytics 的标注缓存，否则训练会静默复用旧标签（见函数说明）
+    _invalidate_label_cache(ds_dir)
+    return saved, str(label_path.relative_to(ds_dir))
+
+
+def prelabel_image(
+    img_path: Path,
+    weights: str = DEFAULT_WEIGHTS,
+    conf: float = 0.25,
+    classes: list[str] | None = None,
+    imgsz: int = 640,
+) -> list[dict]:
+    """对单张图片做检测，返回可用作标注的框（原图像素 + 置信度）"""
+    result = detect_image(
+        img_path, weights=weights, conf=conf, classes=classes, imgsz=imgsz, save_result=False
+    )
+    return result["detections"]
 
 
 def start_train_job(
