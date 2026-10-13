@@ -12,13 +12,14 @@ from typing import Any, Callable, Optional
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"            # 唯一的权重目录（含自动下载的缓存）
+UPLOAD_DIR = BASE_DIR / "data" / "uploads"  # 上传的图片（待推理图片列表）
 RESULTS_DIR = BASE_DIR / "data" / "results"  # 推理结果图
 VIDEO_DIR = BASE_DIR / "data" / "videos"     # 上传的视频
 OUTPUT_DIR = BASE_DIR / "data" / "outputs"   # 推理结果视频
 DATASETS_DIR = BASE_DIR / "data" / "datasets"  # 训练数据集
 RUNS_DIR = BASE_DIR / "data" / "runs"        # 训练输出
 
-DEFAULT_WEIGHTS = "yolov8s-worldv2.pt"
+DEFAULT_WEIGHTS = "medium.pt"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"}
 
@@ -222,7 +223,7 @@ def _clamp_imgsz(imgsz: int) -> int:
 def detect_image(
     src: Path,
     weights: str = DEFAULT_WEIGHTS,
-    conf: float = 0.25,
+    conf: float = 0.38,
     classes: list[str] | None = None,
     imgsz: int = 640,
     save_result: bool = True,
@@ -377,10 +378,103 @@ def _annotate_frame(
     return frame
 
 
+def _collect_best_frame(frame, frame_index: int, count: int) -> dict:
+    """收集一帧，用于「图预览」：选检出目标数最多的那一帧（信息量最大）
+
+    简化版：只记录帧本身（前端拿到后会重新走图片推理，不需要这里的坐标）。
+    """
+    return {
+        "frame": frame.copy(),  # 必须 copy：cap.read 可能复用缓冲区
+        "frame_index": frame_index,
+        "count": count,
+    }
+
+
+def _save_best_frame(best: dict, src_stem: str) -> str | None:
+    """把「召回率最高帧」保存为待推理图片（data/uploads/），返回文件名
+
+    src_stem: 原始视频名（不含 _det 后缀），这样最佳帧能被 list_videos 匹配回输出视频。
+    用户点「图预览」后，前端直接拿这个文件名走图片推理（自动切到推理结果页）。
+    后端只存图，不做任何渲染。
+
+    写入前先删掉同一视频上次提取的最佳帧，避免 uploads/ 里不断堆积
+    （文件名含帧号，不复用旧名；但一个源视频只需要保留最新的一张）。
+    """
+    import cv2
+
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    name = f"{src_stem}_best_{best['frame_index']}.jpg"
+    # 清理该源视频之前提取的最佳帧（不同帧号 = 不同文件名，会越积越多）
+    for old in UPLOAD_DIR.glob(f"{src_stem}_best_*.jpg"):
+        try:
+            old.unlink(missing_ok=True)
+        except OSError:
+            pass
+    dest = UPLOAD_DIR / name
+    # imencode + tofile 写字节，绕开 Windows 中文路径的窄字符 fopen
+    ok, buf = cv2.imencode(".jpg", best["frame"])
+    if not ok:
+        return None
+    buf.tofile(str(dest))
+    return name
+
+
+def _count_class(r: Any, name_hint: str = "head") -> int:
+    """统计推理结果里某类（默认 head）的检出数。
+
+    优先按类别名匹配（不区分大小写，支持子串如 'head' / 'person'）；
+    匹配不到时返回 0（该权重没有这类）。
+    """
+    names = r.names
+    hint = name_hint.lower()
+    target_ids: list[int] = []
+    if isinstance(names, dict):
+        for cid, cname in names.items():
+            if hint in str(cname).lower():
+                target_ids.append(int(cid))
+    else:
+        for cid, cname in enumerate(names):
+            if hint in str(cname).lower():
+                target_ids.append(cid)
+    if not target_ids:
+        return 0
+    n = 0
+    for box in r.boxes:
+        if int(box.cls[0]) in target_ids:
+            n += 1
+    return n
+
+
+def _save_head_chart(
+    head_counts: list, out_path: Path, fps: float = 25.0, start_frame: int = 0
+) -> str | None:
+    """把每帧 head 计数存为 json（data/outputs/frames/<视频stem>.json），返回文件名
+
+    前端据此画「人数折线图」。数据为 [[frame_idx, count], ...]（帧号为原视频绝对帧号）。
+    fps / start_frame 用来把帧号换算成时间（秒）显示在 X 轴上。
+    """
+    import json
+
+    frames_dir = OUTPUT_DIR / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    name = f"{out_path.stem}.json"
+    payload = {
+        "head_counts": head_counts,
+        "source": out_path.name,
+        "fps": round(float(fps), 3) if fps else 25.0,
+        "start_frame": int(start_frame),
+    }
+    (frames_dir / name).write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return name
+
+
 def start_video_job(
     src: Path,
     weights: str = DEFAULT_WEIGHTS,
-    conf: float = 0.25,
+    conf: float = 0.38,
     stride: int = 1,
     classes: list[str] | None = None,
     start: float = 0.0,
@@ -405,6 +499,7 @@ def start_video_job(
         "total": 0,
         "message": "准备中…",
         "result_url": None,
+        "head_counts": [],   # 每帧 head 类检出数（折线图数据），形如 [(frame_idx, count)]
     }
     threading.Thread(
         target=_run_video_job,
@@ -483,6 +578,7 @@ def _run_video_job(
         dev = device_arg()
         idx = 0
         last_annotated = None
+        best = None          # 召回率最高帧（目标数最多）
         while idx < f1 - f0:
             if _cancelled(job):
                 raise _JobCancelled()
@@ -492,6 +588,12 @@ def _run_video_job(
             # 按 stride 抽帧推理，其余帧复用上一帧结果
             if idx % stride == 0:
                 r = model.predict(source=frame, conf=conf, device=dev, verbose=False)[0]
+                n = len(r.boxes)
+                # 人数折线图数据：记录每帧 head 类检出数（stride 抽帧，中间帧不推理）
+                job["head_counts"].append([f0 + idx, _count_class(r, "head")])
+                # 目标数最多的一帧 = 信息量最大（召回率代理指标）
+                if best is None or n > best["count"]:
+                    best = _collect_best_frame(frame, f0 + idx, n)
                 last_annotated = _annotate_frame(
                     frame.copy(), r, render=render, line_width=line_width
                 )
@@ -504,10 +606,34 @@ def _run_video_job(
         cap.release()
         writer.release()
 
+        # ⚠️ 顺序很重要：先把 chart_url / best_frame 等附加产物写好，最后才置 status="done"。
+        # 否则前端轮询可能在 status 已 done、但 chart_url 还没写好的瞬间拿到结果，
+        # 表现为「点预览没有折线图」。
         job["total"] = f1 - f0
-        job["status"] = "done"
         job["message"] = f"完成，共 {idx} 帧（{start:.0f}s ~ {end:.0f}s）"
         job["result_url"] = f"/outputs/{out_path.name}"
+        # 人数折线图数据：存为 json 侧车（data/outputs/frames/），结果库可回看
+        try:
+            chart_name = _save_head_chart(job["head_counts"], out_path, fps=fps, start_frame=f0)
+            if chart_name:
+                job["chart_url"] = f"/outputs/frames/{chart_name}"
+        except Exception:  # noqa: BLE001
+            logger = __import__("logging").getLogger("watch")
+            logger.exception("保存人数折线图数据失败")
+        # 「图预览」：把召回率最高帧保存为待推理图片（data/uploads/），前端自动推理
+        # 注意：只在 job 里记录文件名，不往 message 里拼——用户嫌完成信息太乱，
+        # 最佳帧入口在结果库的「图预览」按钮（/api/videos 的 best_frame 字段）。
+        if best is not None:
+            try:
+                best_name = _save_best_frame(best, src.stem)
+                if best_name:
+                    job["best_frame"] = best_name
+            except Exception:  # noqa: BLE001
+                logger = __import__("logging").getLogger("watch")
+                logger.exception("保存视频最佳帧失败")
+
+        # 最后一步才置 done：保证前端一旦看到 done，chart_url / best_frame 一定已就绪
+        job["status"] = "done"
     except _JobCancelled:
         # 取消：尽量释放资源、删掉半成品，标记为 cancelled
         try:
@@ -881,7 +1007,7 @@ def save_labels_for_image(img_path: Path, dets: list[dict]) -> tuple[int, str]:
 def prelabel_image(
     img_path: Path,
     weights: str = DEFAULT_WEIGHTS,
-    conf: float = 0.25,
+    conf: float = 0.38,
     classes: list[str] | None = None,
     imgsz: int = 640,
 ) -> list[dict]:

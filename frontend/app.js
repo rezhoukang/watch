@@ -147,7 +147,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
 /* ==================== 环境状态 / 模型模式（普通 YOLO ↔ YOLO-World）==================== */
 
 let WORLD_WEIGHTS = [];   // 属于 YOLO-World 的权重文件名（由后端告知）
-let DEFAULT_WEIGHTS = 'yolov8s-worldv2.pt';   // 下拉框默认选中（后端 status 覆盖）
+let DEFAULT_WEIGHTS = 'medium.pt';   // 下拉框默认选中（后端 status 覆盖）
 
 /** 填充下拉框，并尽量保留原选择；无选择时用 preferred（默认权重） */
 function fillSelect(id, names, preferred = '') {
@@ -359,10 +359,8 @@ document.querySelectorAll('.subtab').forEach((t) => {
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 
-let DET = null;   // 当前查看的推理结果
-
-/** 去重默认开关：勾选框与 DET.dedup 的初值都取它，避免「界面勾着但没生效」 */
-const DEDUP_DEFAULT = true;
+/** 去重默认开关：勾选框与 view.dedup 的初值都取它，避免「界面勾着但没生效」 */
+const DEDUP_DEFAULT = false;
 
 /** 类别 → 颜色：黄金角取色，区分度高且白字可读 */
 function classColor(i) {
@@ -374,9 +372,20 @@ function classColorA(i, alpha) {
   return `hsla(${Math.round((i * 137.508) % 360)}, 62%, 42%, ${alpha})`;
 }
 
-/** 渲染整个结果页（原图 + 前端叠加框 + 筛选条 + 明细表） */
-function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
-  const box = el('detectResult');
+/**
+ * 渲染推理结果查看器（原图 + 前端叠加框 + 筛选条 + 明细表）
+ * 图片页与视频页「图预览」共用；opts.root 指定渲染到哪个容器。
+ *
+ * @param {object} r      推理结果 {detections, mode, weight, classes_used, imgsz, ...}
+ * @param {string} filename 标题（图片文件名 / 视频名+帧信息）
+ * @param {number} confUsed 置信度初值
+ * @param {number} elapsed  推理耗时（秒）
+ * @param {number} imgsz    推理尺寸
+ * @param {object} opts    { root, imgUrl }
+ */
+function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
+  const box = opts.root || el('detectResult');
+  const imgUrl = opts.imgUrl || `/images/${encodeURIComponent(filename)}`;
   const dets = Array.isArray(r.detections) ? r.detections : [];
 
   // 类别按出现次数降序，分配固定颜色
@@ -385,13 +394,15 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
   const classes = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
   const colorOf = new Map(classes.map((name, i) => [name, classColor(i)]));
 
-  DET = {
+  // 作用域状态（不再用全局 DET，支持多个查看器共存）
+  const view = {
+    root: box,
     dets,
     classes,
     colorOf,
     hidden: new Set(),          // 被关掉的类别
     solo: null,                 // 双击胶囊 → 只看这一类
-    shape: 'box',               // 图形：'box' 框 | 'dot' 中心点
+    shape: 'box',               // 图形：'box' 框 | 'fill' 实心 | 'dot' 中心点
     confMin: Number(confUsed) || 0.01,
     naturalW: 1,
     naturalH: 1,
@@ -401,6 +412,8 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
     dedupNest: 0.8,             // 一个框被另一个覆盖 ≥ 这个比例 → 视为同一目标
     dedupKeep: 'conf',          // 冲突时先留谁：'conf' 得分高 / 'big' 大框 / 'small' 小框
   };
+  view.q = (sel) => box.querySelector(sel);
+  view.qs = (sel) => [...box.querySelectorAll(sel)];
 
   const modeLabel = r.mode === 'world' ? 'YOLO-World' : '普通 YOLO';
   const clsNote =
@@ -413,40 +426,41 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
       `<span class="meta">${esc(modeLabel)}｜${esc(r.weight || '')}｜${esc(clsNote)}｜` +
       `推理阈值 ${esc(confUsed)}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
     `<div class="viewer-bar">` +
-      `<div class="seg" id="detShape">` +
+      `<div class="seg" data-role="shape">` +
         `<button class="seg-btn active" data-shape="box">框</button>` +
+        `<button class="seg-btn" data-shape="fill">实心</button>` +
         `<button class="seg-btn" data-shape="dot">中心点</button>` +
       `</div>` +
-      `<label>置信度 ≥ <input type="range" id="detMinConf" min="0.01" max="0.99" step="0.01" value="${esc(confUsed)}">` +
-      `<b id="detMinConfVal">${esc(confUsed)}</b></label>` +
-      `<label><input type="checkbox" id="detAlwaysTag"> 常显标签</label>` +
-      `<div class="chips" id="detChips"></div>` +
+      `<label>置信度 ≥ <input type="range" data-role="minconf" min="0.01" max="0.99" step="0.01" value="${esc(confUsed)}">` +
+      `<b data-role="minconf-val">${esc(confUsed)}</b></label>` +
+      `<label><input type="checkbox" data-role="alwaystag"> 常显标签</label>` +
+      `<div class="chips" data-role="chips"></div>` +
     `</div>` +
     `<div class="dedup-bar">` +
-      `<label><input type="checkbox" id="dedupOn"${DEDUP_DEFAULT ? ' checked' : ''}> 去重</label>` +
-      `<label>中心距 ≤ <input type="number" id="dedupDist" value="20" min="0" max="500" step="1"> px</label>` +
-      `<label>内嵌率 ≥ <input type="number" id="dedupNest" value="80" min="0" max="100" step="5"> %</label>` +
-      `<label>重叠时保留 <select id="dedupKeep">` +
+      `<label><input type="checkbox" data-role="dedupon"${DEDUP_DEFAULT ? ' checked' : ''}> 去重</label>` +
+      `<label>中心距 ≤ <input type="number" data-role="dedupdist" value="20" min="0" max="500" step="1"> px</label>` +
+      `<label>内嵌率 ≥ <input type="number" data-role="dedupnest" value="80" min="0" max="100" step="5"> %</label>` +
+      `<label>重叠时保留 <select data-role="dedupkeep">` +
         `<option value="conf">得分高</option>` +
         `<option value="big">大框（外包）</option>` +
         `<option value="small">小框（内嵌）</option>` +
       `</select></label>` +
     `</div>` +
-    `<div class="viewer" id="detViewer">` +
-      `<img class="base" id="detBaseImg" src="/images/${encodeURIComponent(filename)}" alt="推理图">` +
-      `<div class="boxes" id="detBoxes"></div>` +
+    `<div class="viewer" data-role="viewer">` +
+      `<img class="base" data-role="baseimg" src="${esc(imgUrl)}" alt="推理图">` +
+      `<div class="boxes" data-role="boxes"></div>` +
     `</div>` +
     `<div class="viewer-foot">` +
-      `<span id="detCount"></span>` +
+      `<span data-role="count"></span>` +
       (r.result_url ? `<a href="${esc(r.result_url)}" target="_blank">后端渲染图（对照）</a>` : '') +
     `</div>` +
     `<div class="det-table-wrap"><table>` +
       `<thead><tr><th>类别</th><th>置信度</th><th>中心 (cx, cy)</th><th>宽 × 高</th>` +
       `<th>左上右下 (x1, y1, x2, y2)</th></tr></thead>` +
-      `<tbody id="detTableBody"></tbody></table></div>`;
+      `<tbody data-role="tablebody"></tbody></table></div>`;
 
   // 类别胶囊：单击开关，双击只看这一类
-  const chips = el('detChips');
+  const chips = view.q('[data-role="chips"]');
   if (classes.length) {
     classes.forEach((name) => {
       const b = document.createElement('button');
@@ -456,18 +470,18 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
       b.textContent = `${name} ${counts.get(name)}`;   // 初值；paintDetects 会按实际显示数刷新
       b.title = '单击：显示 / 隐藏这一类｜双击：只看这一类';
       b.addEventListener('click', () => {
-        if (DET.hidden.has(name)) DET.hidden.delete(name);
-        else DET.hidden.add(name);
-        DET.solo = null;
-        syncChipState();
-        paintDetects();
+        if (view.hidden.has(name)) view.hidden.delete(name);
+        else view.hidden.add(name);
+        view.solo = null;
+        syncChipState(view);
+        paintDetects(view);
       });
       b.addEventListener('dblclick', () => {
-        const soloing = DET.solo === name;
-        DET.solo = soloing ? null : name;
-        DET.hidden = soloing ? new Set() : new Set(classes.filter((n) => n !== name));
-        syncChipState();
-        paintDetects();
+        const soloing = view.solo === name;
+        view.solo = soloing ? null : name;
+        view.hidden = soloing ? new Set() : new Set(classes.filter((n) => n !== name));
+        syncChipState(view);
+        paintDetects(view);
       });
       chips.appendChild(b);
     });
@@ -476,7 +490,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
   }
 
   // 明细表一次建好，靠 hidden 切换（不重建，避免闪烁）
-  const tbody = el('detTableBody');
+  const tbody = view.q('[data-role="tablebody"]');
   dets.forEach((d, i) => {
     const [x1, y1, x2, y2] = d.bbox;
     const [cx, cy] = detCenter(d);
@@ -487,63 +501,63 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
       `<td>${esc(d.class_name)}</td><td>${esc(d.confidence)}</td>` +
       `<td>${esc(cx)}, ${esc(cy)}</td><td>${esc(w)} × ${esc(h)}</td>` +
       `<td>${esc(x1)}, ${esc(y1)}, ${esc(x2)}, ${esc(y2)}</td>`;
-    tr.addEventListener('mouseenter', () => highlightDet(i, true));
-    tr.addEventListener('mouseleave', () => highlightDet(i, false));
+    tr.addEventListener('mouseenter', () => highlightDet(view, i, true));
+    tr.addEventListener('mouseleave', () => highlightDet(view, i, false));
     tbody.appendChild(tr);
   });
 
-  // 显示方式：框 / 中心点
-  document.querySelectorAll('#detShape .seg-btn').forEach((b) => {
+  // 显示方式：框 / 实心 / 中心点
+  view.qs('[data-role="shape"] .seg-btn').forEach((b) => {
     b.addEventListener('click', () => {
-      DET.shape = b.dataset.shape || 'box';
-      document
-        .querySelectorAll('#detShape .seg-btn')
-        .forEach((x) => x.classList.toggle('active', x === b));
-      paintDetects();
+      view.shape = b.dataset.shape || 'box';
+      view.qs('[data-role="shape"] .seg-btn').forEach((x) => x.classList.toggle('active', x === b));
+      paintDetects(view);
     });
   });
 
   // 二次筛选：不用重跑模型，纯前端过滤
-  const slider = el('detMinConf');
+  const slider = view.q('[data-role="minconf"]');
   slider.addEventListener('input', () => {
-    DET.confMin = Number(slider.value);
-    el('detMinConfVal').textContent = DET.confMin.toFixed(2);
-    paintDetects();
+    view.confMin = Number(slider.value);
+    view.q('[data-role="minconf-val"]').textContent = view.confMin.toFixed(2);
+    paintDetects(view);
   });
-  el('detAlwaysTag').addEventListener('change', (e) => {
-    el('detViewer').classList.toggle('always-tags', e.target.checked);
+  view.q('[data-role="alwaystag"]').addEventListener('change', (e) => {
+    view.q('[data-role="viewer"]').classList.toggle('always-tags', e.target.checked);
   });
 
   // 去重：纯前端后处理，参数随时可调
   const applyDedup = () => {
-    DET.dedup = el('dedupOn').checked;
-    DET.dedupDist = Number(el('dedupDist').value) || 0;
-    DET.dedupNest = (Number(el('dedupNest').value) || 0) / 100;
-    DET.dedupKeep = el('dedupKeep').value;
-    paintDetects();
+    view.dedup = view.q('[data-role="dedupon"]').checked;
+    view.dedupDist = Number(view.q('[data-role="dedupdist"]').value) || 0;
+    view.dedupNest = (Number(view.q('[data-role="dedupnest"]').value) || 0) / 100;
+    view.dedupKeep = view.q('[data-role="dedupkeep"]').value;
+    paintDetects(view);
   };
-  el('dedupOn').addEventListener('change', applyDedup);
-  el('dedupKeep').addEventListener('change', applyDedup);
-  ['dedupDist', 'dedupNest'].forEach((id) => el(id).addEventListener('input', applyDedup));
+  view.q('[data-role="dedupon"]').addEventListener('change', applyDedup);
+  view.q('[data-role="dedupkeep"]').addEventListener('change', applyDedup);
+  ['dedupdist', 'dedupnest'].forEach((role) =>
+    view.q(`[data-role="${role}"]`).addEventListener('input', applyDedup)
+  );
 
   // 图片就绪后再画框（需要原图宽高把 bbox 换算成百分比）
-  const img = el('detBaseImg');
+  const img = view.q('[data-role="baseimg"]');
   const onReady = () => {
-    DET.naturalW = img.naturalWidth || 1;
-    DET.naturalH = img.naturalHeight || 1;
-    paintDetects();
+    view.naturalW = img.naturalWidth || 1;
+    view.naturalH = img.naturalHeight || 1;
+    paintDetects(view);
   };
   if (img.complete && img.naturalWidth) onReady();
   else img.addEventListener('load', onReady);
   img.addEventListener('error', () => {
-    el('detCount').textContent = `原图加载失败：/images/${filename}`;
+    view.q('[data-role="count"]').textContent = `原图加载失败：${imgUrl}`;
   });
 }
 
-/** 让胶囊的亮/灰状态与 DET.hidden 保持一致 */
-function syncChipState() {
-  document.querySelectorAll('#detChips .chip').forEach((b) => {
-    b.classList.toggle('off', DET.hidden.has(b.dataset.name));
+/** 让胶囊的亮/灰状态与 view.hidden 保持一致 */
+function syncChipState(view) {
+  view.qs('[data-role="chips"] .chip').forEach((b) => {
+    b.classList.toggle('off', view.hidden.has(b.dataset.name));
   });
 }
 
@@ -599,31 +613,33 @@ function coveredRatio(a, b) {
 /**
  * 去重：只合并「同一类别」的框 —— 中心点太近、或一个框被另一个大半包住时，只留一个。
  * 按 dedupKeep 决定先留谁（得分高 / 大框 / 小框），再贪心吃掉与它冲突的后继。
+ * @param {object} view 查看器状态
+ * @param {number[]} list 候选下标（已按类别/置信度筛过）
  * 返回保留下来的原始下标（升序）。
  */
-function dedupPick(list) {
+function dedupPick(view, list) {
   const rank = {
     conf: (d) => -d.confidence,
     big: (d) => -detArea(d),
     small: (d) => detArea(d),
-  }[DET.dedupKeep];
+  }[view.dedupKeep];
 
-  const sorted = [...list].sort((i, j) => rank(DET.dets[i]) - rank(DET.dets[j]));
+  const sorted = [...list].sort((i, j) => rank(view.dets[i]) - rank(view.dets[j]));
   const kept = [];
 
   for (const i of sorted) {
-    const a = DET.dets[i];
+    const a = view.dets[i];
     let dup = false;
     for (const k of kept) {
-      const b = DET.dets[k];
+      const b = view.dets[k];
       if (a.class_name !== b.class_name) continue;   // 跨类别不合并（人身上可以有手机）
-      if (DET.dedupDist > 0 && centerDist(a, b) <= DET.dedupDist) {
+      if (view.dedupDist > 0 && centerDist(a, b) <= view.dedupDist) {
         dup = true;
         break;
       }
       if (
-        DET.dedupNest > 0 &&
-        (coveredRatio(a, b) >= DET.dedupNest || coveredRatio(b, a) >= DET.dedupNest)
+        view.dedupNest > 0 &&
+        (coveredRatio(a, b) >= view.dedupNest || coveredRatio(b, a) >= view.dedupNest)
       ) {
         dup = true;
         break;
@@ -635,50 +651,67 @@ function dedupPick(list) {
 }
 
 /** 给标注节点挂上 hover 高亮 / 点击定位事件 */
-function bindDetNode(node, i) {
-  node.addEventListener('mouseenter', () => highlightDet(i, true));
-  node.addEventListener('mouseleave', () => highlightDet(i, false));
+function bindDetNode(view, node, i) {
+  node.addEventListener('mouseenter', () => highlightDet(view, i, true));
+  node.addEventListener('mouseleave', () => highlightDet(view, i, false));
   node.addEventListener('click', () => {
-    const tr = document.querySelector(`#detTableBody tr[data-i="${i}"]`);
+    const tr = view.q(`[data-role="tablebody"] tr[data-i="${i}"]`);
     if (tr) tr.scrollIntoView({ block: 'nearest' });
   });
 }
 
-/** 按当前筛选条件重画标注（框 或 中心点），并同步明细表 */
-function paintDetects() {
-  if (!DET) return;
-  const wrap = el('detBoxes');
+/** 按当前筛选条件重画标注（框 / 实心 / 中心点），并同步明细表 */
+function paintDetects(view) {
+  if (!view) return;
+  const wrap = view.q('[data-role="boxes"]');
   wrap.innerHTML = '';
 
   const show = [];
-  DET.dets.forEach((d, i) => {
-    if (DET.hidden.has(d.class_name)) return;
-    if (d.confidence < DET.confMin) return;
+  view.dets.forEach((d, i) => {
+    if (view.hidden.has(d.class_name)) return;
+    if (d.confidence < view.confMin) return;
     show.push(i);
   });
 
   // 去重是最后一道：先按类别/置信度筛完，再合并重复目标
   const before = show.length;
-  const shown = DET.dedup ? dedupPick(show) : show;
+  const shown = view.dedup ? dedupPick(view, show) : show;
   const merged = before - shown.length;
 
   shown.forEach((i) => {
-    const d = DET.dets[i];
+    const d = view.dets[i];
     const [x1, y1, x2, y2] = d.bbox;
     // 类别色只写一次：CSS 里边框 / 圆点 / 标签底色都取 var(--c)
-    const color = DET.colorOf.get(d.class_name) || '#1a73e8';
+    const color = view.colorOf.get(d.class_name) || '#1a73e8';
     const pct = (v, total) => `${(v / total) * 100}%`;
 
-    if (DET.shape === 'dot') {
+    if (view.shape === 'fill') {
+      // 实心：完全不透明填充 + 实线边框（透明度 0，alpha=1），填充色用 --c-soft
+      const node = document.createElement('div');
+      node.className = 'bbox fill';
+      node.dataset.i = String(i);
+      node.style.setProperty('--c', color);
+      node.style.setProperty(
+        '--c-soft',
+        classColorA(Math.max(0, view.classes.indexOf(d.class_name)), 1)
+      );
+      node.style.left = pct(x1, view.naturalW);
+      node.style.top = pct(y1, view.naturalH);
+      node.style.width = pct(x2 - x1, view.naturalW);
+      node.style.height = pct(y2 - y1, view.naturalH);
+      node.appendChild(makeDetTag(d));
+      bindDetNode(view, node, i);
+      wrap.appendChild(node);
+    } else if (view.shape === 'dot') {
       // 1) 幽灵框：平时隐藏，hover 这个点时才浮现，用来看清它到底框住多大范围
       const ghost = document.createElement('div');
       ghost.className = 'bbox ghost';
       ghost.dataset.i = String(i);
       ghost.style.setProperty('--c', color);
-      ghost.style.left = pct(x1, DET.naturalW);
-      ghost.style.top = pct(y1, DET.naturalH);
-      ghost.style.width = pct(x2 - x1, DET.naturalW);
-      ghost.style.height = pct(y2 - y1, DET.naturalH);
+      ghost.style.left = pct(x1, view.naturalW);
+      ghost.style.top = pct(y1, view.naturalH);
+      ghost.style.width = pct(x2 - x1, view.naturalW);
+      ghost.style.height = pct(y2 - y1, view.naturalH);
       wrap.appendChild(ghost);
 
       // 2) 点（放在框后面 = 显示在框上面）
@@ -687,39 +720,39 @@ function paintDetects() {
       dot.className = 'dot';
       dot.dataset.i = String(i);
       dot.style.setProperty('--c', color);
-      dot.style.left = pct(cx, DET.naturalW);
-      dot.style.top = pct(cy, DET.naturalH);
+      dot.style.left = pct(cx, view.naturalW);
+      dot.style.top = pct(cy, view.naturalH);
       dot.appendChild(document.createElement('i'));
       dot.appendChild(makeDetTag(d));
-      bindDetNode(dot, i);
+      bindDetNode(view, dot, i);
       wrap.appendChild(dot);
     } else {
       const node = document.createElement('div');
       node.className = 'bbox';
       node.dataset.i = String(i);
       node.style.setProperty('--c', color);
-      node.style.left = pct(x1, DET.naturalW);
-      node.style.top = pct(y1, DET.naturalH);
-      node.style.width = pct(x2 - x1, DET.naturalW);
-      node.style.height = pct(y2 - y1, DET.naturalH);
+      node.style.left = pct(x1, view.naturalW);
+      node.style.top = pct(y1, view.naturalH);
+      node.style.width = pct(x2 - x1, view.naturalW);
+      node.style.height = pct(y2 - y1, view.naturalH);
       node.appendChild(makeDetTag(d));
-      bindDetNode(node, i);
+      bindDetNode(view, node, i);
       wrap.appendChild(node);
     }
   });
 
   const visible = new Set(shown);
-  el('detTableBody').querySelectorAll('tr').forEach((tr) => {
+  view.q('[data-role="tablebody"]').querySelectorAll('tr').forEach((tr) => {
     tr.hidden = !visible.has(Number(tr.dataset.i));
   });
 
   // 胶囊上的数字 = 图上实际显示的该类数量，跟下面那句"N 个框"对得上（受筛选/去重影响）
   const shownCounts = new Map();
   shown.forEach((i) => {
-    const name = DET.dets[i].class_name;
+    const name = view.dets[i].class_name;
     shownCounts.set(name, (shownCounts.get(name) || 0) + 1);
   });
-  document.querySelectorAll('#detChips .chip').forEach((b) => {
+  view.qs('[data-role="chips"] .chip').forEach((b) => {
     const n = shownCounts.get(b.dataset.name) || 0;
     b.textContent = `${b.dataset.name} ${n}`;
     b.classList.toggle('zero', n === 0);
@@ -727,23 +760,23 @@ function paintDetects() {
 
   const notes = [];
   if (merged > 0) notes.push(`去重合并 ${merged} 个`);
-  if (shown.length + merged < DET.dets.length) notes.push('部分被类别/置信度筛选隐藏');
+  if (shown.length + merged < view.dets.length) notes.push('部分被类别/置信度筛选隐藏');
 
-  const unit = DET.shape === 'dot' ? '个点' : '个框';
-  el('detCount').textContent =
-    `图上 ${shown.length} ${unit} / 共检出 ${DET.dets.length} 个` +
+  const unit = view.shape === 'dot' ? '个点' : '个框';
+  view.q('[data-role="count"]').textContent =
+    `图上 ${shown.length} ${unit} / 共检出 ${view.dets.length} 个` +
     (notes.length ? `（${notes.join('；')}）` : '');
 }
 
 /** 标注 ↔ 明细表行 双向高亮；中心点模式下顺带浮现它对应的框 */
-function highlightDet(i, on) {
-  document
-    .querySelectorAll(`#detBoxes [data-i="${i}"]:not(.ghost)`)
+function highlightDet(view, i, on) {
+  view
+    .qs(`[data-role="boxes"] [data-i="${i}"]:not(.ghost)`)
     .forEach((n) => n.classList.toggle('hl', on));
-  document
-    .querySelectorAll(`#detBoxes .bbox.ghost[data-i="${i}"]`)
+  view
+    .qs(`[data-role="boxes"] .bbox.ghost[data-i="${i}"]`)
     .forEach((n) => n.classList.toggle('show', on));
-  const tr = document.querySelector(`#detTableBody tr[data-i="${i}"]`);
+  const tr = view.q(`[data-role="tablebody"] tr[data-i="${i}"]`);
   if (tr) tr.classList.toggle('hl', on);
 }
 
@@ -806,7 +839,7 @@ async function detectImage(filename) {
 
   try {
     // 1) 先取参数（元素缺失会被 catch 住并显示出来）
-    const conf = el('detConf').value || '0.01';
+    const conf = el('detConf').value || '0.38';
     const imgsz = el('detImgsz').value || '640';
     const { weights, isWorld, classes } = readDetectOptions('det');
     const modeText = isWorld
@@ -1026,7 +1059,7 @@ async function detectVideo(filename, btn) {
   const item = btn.closest('.item');
 
   try {
-    const conf = el('vidConf').value || '0.01';
+    const conf = el('vidConf').value || '0.38';
     const stride = el('vidStride').value || '1';
     const render = el('vidRender').value || 'box';
     const { start, end } = readVideoRange(item);
@@ -1076,10 +1109,9 @@ async function detectVideo(filename, btn) {
           box.innerHTML =
             `<div style="color:#f9a825;font-weight:600">已取消推理任务。</div>`;
         } else if (job.result_url) {
-          box.innerHTML =
-            `<video src="${esc(job.result_url)}" controls></video>` +
-            `<div class="summary">${esc(job.message)}</div>` +
-            `<a class="btn small" href="${esc(job.result_url)}" download>导出视频</a>`;
+          box.innerHTML = `<video src="${esc(job.result_url)}" controls autoplay></video>`;
+          // 折线图单独面板显示（不塞在视频下面，避免被大视频挤到看不见）
+          showHeadChart(job.chart_url, filename);
         } else {
           box.innerHTML =
             `<div style="color:#c5221f;font-weight:600">视频推理未成功：${esc(job.message)}</div>`;
@@ -1100,6 +1132,314 @@ async function detectVideo(filename, btn) {
 el('refreshVideos').addEventListener('click', loadVideos);
 
 /* ==================== 推理结果库（data/outputs/）==================== */
+
+/**
+ * 在独立面板里显示人数折线图（视频页）
+ * @param {string} chartUrl 折线图数据 json（无则显示提示）
+ * @param {string} title    面板标题后缀（一般传结果视频名）
+ */
+function showHeadChart(chartUrl, title = '') {
+  const panel = document.getElementById('chartPanel');
+  const host = document.getElementById('chartHost');
+  // 兜底：页面是旧缓存（没有面板）时，退回到塞在推理结果区里，保证能看到图
+  if (!panel || !host) {
+    const fallback = el('videoResult');
+    if (chartUrl) renderHeadChart(fallback, chartUrl);
+    return;
+  }
+  const titleNode = document.getElementById('chartTitle');
+  if (titleNode) titleNode.textContent = title ? `— ${title}` : '';
+  panel.hidden = false;
+  host.innerHTML = '';
+  if (!chartUrl) {
+    host.innerHTML =
+      '<div class="headchart-empty">该结果没有折线图数据（旧结果或检测时未记录）</div>';
+  } else {
+    renderHeadChart(host, chartUrl);
+  }
+  // 面板在页面下方，滚进视野，否则用户以为"没出现"
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/** 收起折线图面板 */
+function hideHeadChart() {
+  const panel = document.getElementById('chartPanel');
+  const host = document.getElementById('chartHost');
+  if (panel) panel.hidden = true;
+  if (host) host.innerHTML = '';
+}
+
+const _chartCloseBtn = document.getElementById('chartClose');
+if (_chartCloseBtn) _chartCloseBtn.addEventListener('click', hideHeadChart);
+
+/**
+ * 人数折线图（每帧 head 检出数）—— 像剪辑时间轴一样：
+ *  - 横向滚动（外层 overflow-x: auto），鼠标按住拖动可平移
+ *  - 按住 Ctrl + 滚轮：缩放「每帧占的像素宽」，以鼠标位置为锚点（视口不漂移）
+ *  - X 轴显示时间（按 fps 由帧号换算），悬停显示该帧人数
+ * @param {Element} host 渲染到哪个容器
+ * @param {string} chartUrl 折线图数据 json（{head_counts:[[frame,count]], fps, start_frame}）
+ */
+function renderHeadChart(host, chartUrl) {
+  host.innerHTML = '';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'headchart';
+  wrap.innerHTML =
+    `<div class="headchart-head">` +
+    `<span class="headchart-hint">⇔ 滚动/拖动平移 ｜ Ctrl+滚轮 缩放宽度</span></div>` +
+    `<div class="headchart-scroll"><div class="headchart-track"></div></div>`;
+  host.appendChild(wrap);
+
+  const scroll = wrap.querySelector('.headchart-scroll');
+  const track = wrap.querySelector('.headchart-track');
+
+  // 几何常量
+  const PAD_L = 40, PAD_R = 14, PAD_T = 12, PAD_B = 24, H = 150;
+  let pxPerFrame = 6;          // 每帧占的像素宽（Ctrl+滚轮调整）
+  let scale = 6;               // 实际像素/帧（draw 里由 pxPerFrame + 最小宽度约束求得）
+  let view = null;             // 当前视图数据（draw 时填充）
+
+  /** 帧号 → 该帧在 track 里的像素 x（依赖当前 scale） */
+  function frameToX(frame) {
+    if (!view) return PAD_L;
+    return PAD_L + (frame - view.firstFrame) * scale;
+  }
+
+  /** track 像素 x → 帧号（frameToX 的逆） */
+  function xToFrame(px) {
+    if (!view || !scale) return 0;
+    return view.firstFrame + (px - PAD_L) / scale;
+  }
+
+  /** 帧号 → 时间文本（秒，超过 1 小时显示 h:mm:ss） */
+  function fmtFrameTime(frame) {
+    const fps = view && view.fps ? view.fps : 25;
+    const sec = Math.max(0, frame / fps);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+  }
+
+  // 滚轮：Ctrl → 缩放宽度；不带 Ctrl → 纵向滚轮转成横向平移（时间轴习惯）
+  scroll.addEventListener(
+    'wheel',
+    (e) => {
+      if (!e.ctrlKey) {
+        // 已滚到两端时不拦截，让页面正常滚动，避免"卡住"感
+        const maxScroll = scroll.scrollWidth - scroll.clientWidth;
+        if (e.deltaY === 0 || maxScroll <= 0) return;
+        if (
+          (e.deltaY > 0 && scroll.scrollLeft >= maxScroll - 1) ||
+          (e.deltaY < 0 && scroll.scrollLeft <= 0)
+        ) {
+          return;
+        }
+        e.preventDefault();
+        scroll.scrollLeft += e.deltaY;
+        return;
+      }
+      e.preventDefault();
+      if (!view) return;
+      const rect = scroll.getBoundingClientRect();
+      const pointerX = e.clientX - rect.left;      // 视口内坐标
+      const posInTrack = pointerX + scroll.scrollLeft;
+      const anchorFrame = xToFrame(posInTrack);    // 鼠标下的帧
+      const factor = e.deltaY > 0 ? 0.85 : 1.18;
+      pxPerFrame = Math.min(60, Math.max(0.5, pxPerFrame * factor));
+      draw();
+      // 缩放后把锚点帧滚回鼠标原来的位置（精确补偿，视口不漂移）
+      scroll.scrollLeft = frameToX(anchorFrame) - pointerX;
+    },
+    { passive: false }
+  );
+
+  // 按住拖动平移（像时间轴一样）
+  let dragging = false, dragStartX = 0, dragStartScroll = 0;
+  scroll.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    dragStartX = e.clientX;
+    dragStartScroll = scroll.scrollLeft;
+    scroll.classList.add('dragging');
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    scroll.scrollLeft = dragStartScroll - (e.clientX - dragStartX);
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    scroll.classList.remove('dragging');
+  });
+
+  function draw() {
+    const points = view ? view.points : [];
+    if (!points.length) {
+      track.innerHTML = '<div class="headchart-empty">无数据</div>';
+      track.style.width = '100%';
+      return;
+    }
+    view.firstFrame = points[0][0];
+    view.lastFrame = points[points.length - 1][0];
+    const range = Math.max(1, view.lastFrame - view.firstFrame);
+    const maxCount = Math.max(1, ...points.map((p) => p[1]));
+
+    const plotW = Math.max(200, range * pxPerFrame);
+    scale = plotW / range;      // 统一比例：保证折线始终铺满绘图区
+    const width = PAD_L + PAD_R + plotW;
+    const plotH = H - PAD_T - PAD_B;
+    const y = (cnt) => PAD_T + plotH - (cnt / maxCount) * plotH;
+
+    // 折线
+    const poly = points
+      .map(([fr, cnt]) => `${frameToX(fr).toFixed(1)},${y(cnt).toFixed(1)}`)
+      .join(' ');
+
+    // 横向网格 + Y 轴刻度（0 / 一半 / 最大）
+    let grid = '';
+    [0, 0.5, 1].forEach((ratio) => {
+      const cnt = Math.round(maxCount * ratio);
+      const yy = y(cnt).toFixed(1);
+      grid += `<line x1="${PAD_L}" y1="${yy}" x2="${width - PAD_R}" y2="${yy}" class="hg-grid"/>`;
+      grid += `<text x="${PAD_L - 6}" y="${Number(yy) + 4}" class="hg-y">${cnt}</text>`;
+    });
+
+    // X 轴时间刻度：按「好看的」时间步长取，目标 6~10 个刻度
+    const fps = view.fps || 25;
+    const totalSec = range / fps;
+    const niceSteps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
+    const stepSec = niceSteps.find((s) => totalSec / s <= 9) || Math.ceil(totalSec / 8);
+    let xticks = '';
+    const startSec = view.firstFrame / fps;
+    const firstTick = Math.ceil(startSec / stepSec) * stepSec;   // 对齐到整数刻度
+    for (let sec = firstTick; sec <= startSec + totalSec + 1e-6; sec += stepSec) {
+      const fr = sec * fps;
+      const xx = frameToX(fr).toFixed(1);
+      const label = sec >= 3600
+        ? `${Math.floor(sec / 3600)}:${String(Math.floor((sec % 3600) / 60)).padStart(2, '0')}:${String(Math.floor(sec % 60)).padStart(2, '0')}`
+        : `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+      xticks += `<line x1="${xx}" y1="${PAD_T}" x2="${xx}" y2="${H - PAD_B}" class="hg-grid"/>`;
+      xticks += `<text x="${xx}" y="${H - 7}" class="hg-x">${label}</text>`;
+    }
+
+    track.innerHTML =
+      `<svg width="${width}" height="${H}" class="hg-svg">` +
+      grid + xticks +
+      `<polyline points="${poly}" class="hg-line" fill="none"/>` +
+      `<line class="hg-cursor" x1="0" y1="${PAD_T}" x2="0" y2="${H - PAD_B}" style="display:none"/>` +
+      `<circle class="hg-dot" r="3.5" style="display:none"/>` +
+      `<g class="hg-tip" style="display:none">` +
+        `<rect class="hg-tip-bg" rx="3" width="0" height="16"/>` +
+        `<text class="hg-tip-tx" y="11"></text>` +
+      `</g>` +
+      `</svg>`;
+    track.style.width = width + 'px';
+  }
+
+  /**
+   * 悬停：竖线 + 最近数据点 + 人数气泡。
+   * 只绑定一次（每次 draw 会重建 SVG 元素，所以这里按需 query，不缓存节点）。
+   */
+  scroll.addEventListener('mousemove', (e) => {
+    if (dragging || !view || !view.points.length) return;
+    const svg = track.querySelector('svg.hg-svg');
+    if (!svg) return;
+    const cursor = svg.querySelector('.hg-cursor');
+    const dot = svg.querySelector('.hg-dot');
+    const tip = svg.querySelector('.hg-tip');
+    const tipBg = svg.querySelector('.hg-tip-bg');
+    const tipTx = svg.querySelector('.hg-tip-tx');
+    if (!cursor || !dot || !tip || !tipBg || !tipTx) return;
+
+    const rect = scroll.getBoundingClientRect();
+    const posInTrack = e.clientX - rect.left + scroll.scrollLeft;
+    // 线性搜索最近点（点数不多，够用）
+    let nearest = view.points[0];
+    let bestD = Infinity;
+    view.points.forEach((p) => {
+      const d = Math.abs(frameToX(p[0]) - posInTrack);
+      if (d < bestD) { bestD = d; nearest = p; }
+    });
+
+    const maxCount = Math.max(1, ...view.points.map((p) => p[1]));
+    const plotH = H - PAD_T - PAD_B;
+    const xx = frameToX(nearest[0]);
+    const yy = PAD_T + plotH - (nearest[1] / maxCount) * plotH;
+
+    cursor.setAttribute('x1', xx);
+    cursor.setAttribute('x2', xx);
+    cursor.style.display = '';
+    dot.setAttribute('cx', xx);
+    dot.setAttribute('cy', yy);
+    dot.style.display = '';
+
+    const label = `${fmtFrameTime(nearest[0])} · ${nearest[1]} 人`;
+    tipTx.textContent = label;
+    const tw = label.length * 6.5 + 10;   // 粗略估宽
+    tipBg.setAttribute('width', tw);
+    const flip = xx + tw + 8 > Number(svg.getAttribute('width')) - PAD_R;
+    const tx = flip ? xx - tw - 6 : xx + 6;
+    tip.setAttribute('transform', `translate(${tx},${Math.max(2, yy - 22)})`);
+    tip.style.display = '';
+  });
+  scroll.addEventListener('mouseleave', () => {
+    const svg = track.querySelector('svg.hg-svg');
+    if (!svg) return;
+    ['.hg-cursor', '.hg-dot', '.hg-tip'].forEach((sel) => {
+      const n = svg.querySelector(sel);
+      if (n) n.style.display = 'none';
+    });
+  });
+
+  api(chartUrl, {}, 15000)
+    .then((d) => {
+      const raw = (d && Array.isArray(d.head_counts)) ? d.head_counts : [];
+      view = {
+        all: raw,
+        points: condense(raw, 5000),   // 点太多时降采样，避免 SVG 卡顿
+        fps: (d && d.fps) || 25,
+        firstFrame: raw.length ? raw[0][0] : 0,
+        lastFrame: raw.length ? raw[raw.length - 1][0] : 0,
+      };
+      // 标题补充总帧数
+      const hint = wrap.querySelector('.headchart-hint');
+      if (hint && raw.length) {
+        hint.textContent = `共 ${raw.length} 个采样帧 ｜ ⇔ 滚动/拖动平移 ｜ Ctrl+滚轮 缩放`;
+      }
+      // 初始宽度：让整条曲线大约铺满视口（留一点余量，可继续缩放）
+      const range = Math.max(1, view.lastFrame - view.firstFrame);
+      const viewportW = scroll.clientWidth || 600;
+      pxPerFrame = Math.min(12, Math.max(0.5, (viewportW - PAD_L - PAD_R - 40) / range));
+      draw();
+    })
+    .catch((e) => {
+      track.innerHTML = `<div class="headchart-empty">加载失败：${esc(e instanceof Error ? e.message : String(e))}</div>`;
+    });
+}
+
+/**
+ * 降采样：点数超过 maxPoints 时按桶聚合，每桶保留「人数最多」的点（保住峰值形状）。
+ * 用于长时间视频（逐帧记录可能上万点），避免 SVG 渲染卡顿。
+ */
+function condense(points, maxPoints) {
+  if (points.length <= maxPoints) return points;
+  const bucket = Math.ceil(points.length / maxPoints);
+  const out = [];
+  for (let i = 0; i < points.length; i += bucket) {
+    let best = points[i];
+    const end = Math.min(i + bucket, points.length);
+    for (let j = i + 1; j < end; j++) {
+      if (points[j][1] > best[1]) best = points[j];
+    }
+    out.push(best);
+  }
+  return out;
+}
+
 async function loadOutputs() {
   const box = el('outputList');
   try {
@@ -1118,25 +1458,32 @@ async function loadOutputs() {
       const right = document.createElement('span');
       right.className = 'item-actions';
 
-      // 预览：内嵌 <video>
+      // 预览：内嵌 <video>；折线图在独立面板里显示
       const play = document.createElement('button');
       play.className = 'btn small ghost';
       play.textContent = '预览';
       play.addEventListener('click', () => {
         const r = el('videoResult');
         r.innerHTML = `<video src="${esc(o.url)}" controls autoplay></video>`;
+        showHeadChart(o.chart_url, o.filename);
       });
 
-      // 导出（下载）
-      const dl = document.createElement('button');
-      dl.className = 'btn small ghost';
-      dl.textContent = '导出';
-      dl.addEventListener('click', () => {
-        const a = document.createElement('a');
-        a.href = o.url;
-        a.download = o.filename;
-        a.click();
-      });
+      // 图预览：该段「召回率最高帧」已提取到待推理图片，点它切过去并自动推理
+      let pv = null;
+      if (o.best_frame) {
+        pv = document.createElement('button');
+        pv.className = 'btn small ghost';
+        pv.textContent = '图预览';
+        pv.title = '把该段检出目标数最多的一帧提取到「待推理图片」，并自动推理';
+        pv.addEventListener('click', async () => {
+          // 切到图片推理 tab 的「待推理图片」子页
+          document.querySelector('.tab[data-tab="detect"]').click();
+          switchSubPane('images');
+          await loadImages();
+          await detectImage(o.best_frame);
+        });
+        right.appendChild(pv);
+      }
 
       // 删除
       const del = document.createElement('button');
@@ -1152,7 +1499,7 @@ async function loadOutputs() {
         }
       });
 
-      right.append(play, dl, del);
+      right.append(play, del);
       item.appendChild(right);
       box.appendChild(item);
     });
@@ -1785,7 +2132,7 @@ el('annPrelabel').addEventListener('click', async () => {
   try {
     const { weights, classes } = readDetectOptions('ann');
     const q = new URLSearchParams({
-      conf: el('annConf').value || '0.25',
+      conf: el('annConf').value || '0.38',
       weights,
       imgsz: '640',
     });

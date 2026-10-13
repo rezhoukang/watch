@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=28">
+<link rel="stylesheet" href="/style.css?v=33">
 </head>
 <body>
 <div class="app">
@@ -48,10 +48,10 @@
   <!-- ========== 图片推理（图库 / 结果 两个子页面）========== -->
   <section class="panel" id="tab-detect">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="detConf" value="0.01" min="0.01" max="0.99" step="0.05"></label>
+      <label>置信度 <input type="number" id="detConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
       <label>尺寸 imgsz <input type="number" id="detImgsz" value="640" min="320" max="1920" step="32"></label>
       <label>权重 <select id="detWeights"></select></label>
-      <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" value="person" placeholder="person, car, 书本" size="22"></label>
+      <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" value="" placeholder="person, car, 书本" size="22"></label>
     </div>
 
     <nav class="subnav">
@@ -75,14 +75,14 @@
   <!-- ========== 视频推理 ========== -->
   <section class="panel" id="tab-video">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="vidConf" value="0.01" min="0.01" max="0.99" step="0.05"></label>
+      <label>置信度 <input type="number" id="vidConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
       <label>抽帧间隔 <input type="number" id="vidStride" value="1" min="1" max="30" step="1"></label>
       <label>显示形式 <select id="vidRender">
         <option value="box">框</option>
         <option value="dot">中心点</option>
       </select></label>
       <label>权重 <select id="vidWeights"></select></label>
-      <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" value="person" placeholder="person, car" size="20"></label>
+      <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" value="" placeholder="person, car" size="20"></label>
       <button class="btn small" id="refreshVideos">刷新列表</button>
     </div>
     <div class="split">
@@ -94,6 +94,13 @@
         <h2>推理结果</h2>
         <div id="videoResult" class="result-box">点击左侧视频开始推理</div>
       </div>
+    </div>
+    <div class="outlib chart-panel" id="chartPanel" hidden>
+      <h2>
+        <span>人数折线图 <span class="chart-panel-sub" id="chartTitle"></span></span>
+        <button class="btn small ghost" id="chartClose">收起</button>
+      </h2>
+      <div id="chartHost"></div>
     </div>
     <div class="outlib">
       <h2>推理结果库（data/outputs/）<button class="btn small ghost" id="refreshOutputs">刷新</button></h2>
@@ -170,9 +177,9 @@
             <button class="seg-btn" data-shape="dot">中心点</button>
           </div>
           <label title="关掉后连 hover 也不显示类别标签，只显示框"><input type="checkbox" id="annShowLabels" checked> 标签</label>
-          <label>置信度 <input type="number" id="annConf" value="0.25" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
+          <label>置信度 <input type="number" id="annConf" value="0.38" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
           <label>权重 <select id="annWeights"></select></label>
-          <label id="annClassesWrap" hidden>prompt <input type="text" id="annClasses" value="person" placeholder="person, car" size="18"></label>
+          <label id="annClassesWrap" hidden>prompt <input type="text" id="annClasses" value="" placeholder="person, car" size="18"></label>
           <button class="btn small" id="annPrelabel">预标注</button>
           <button class="btn small danger" id="annDeleteAll">清空</button>
           <button class="btn small ghost" id="annSave">保存</button>
@@ -214,6 +221,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=35"></script>
+<script src="/app.js?v=43"></script>
 </body>
 </html>

@@ -204,10 +204,32 @@ def list_videos() -> dict:
         if OUTPUT_DIR.is_dir()
         else []
     )
+    # 扫描 uploads 里视频检测提取出的「最佳帧」（<视频名>_best_<帧号>.jpg）
+    best_frames: dict[str, str] = {}
+    if UPLOAD_DIR.is_dir():
+        for p in UPLOAD_DIR.iterdir():
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS and "_best_" in p.name:
+                orig = p.name.split("_best_", 1)[0]
+                best_frames.setdefault(orig, p.name)
+    out_list: list[dict] = []
+    frames_dir = vision.OUTPUT_DIR / "frames"
+    for f in outputs:
+        entry: dict = {"filename": f, "url": f"/outputs/{f}"}
+        # 人数折线图数据：<视频输出名>.json 侧车（每帧 head 计数）
+        chart_json = frames_dir / f"{Path(f).stem}.json"
+        if chart_json.is_file():
+            entry["chart_url"] = f"/outputs/frames/{chart_json.name}"
+        # 「图预览」：输出视频名去掉 _det... 后即原始视频名，匹配它提取的最佳帧
+        orig = f.split("_det", 1)[0]
+        bf = best_frames.get(orig)
+        if bf:
+            entry["best_frame"] = bf
+            entry["best_frame_url"] = f"/images/{bf}"
+        out_list.append(entry)
     return {
         "count": len(files),
         "videos": [{"filename": f, "url": f"/videos/{f}"} for f in files],
-        "outputs": [{"filename": f, "url": f"/outputs/{f}"} for f in outputs],
+        "outputs": out_list,
     }
 
 
@@ -249,6 +271,12 @@ def get_video(filename: str) -> FileResponse:
     return FileResponse(_safe_file(VIDEO_DIR, filename))
 
 
+@app.get("/outputs/frames/{filename}", summary="访问视频折线图数据（每帧人数）")
+def get_output_frame_data(filename: str) -> FileResponse:
+    """访问 data/outputs/frames/ 下的折线图 json（head_counts）"""
+    return FileResponse(_safe_file(vision.OUTPUT_DIR / "frames", filename))
+
+
 @app.get("/outputs/{filename}", summary="访问推理结果视频")
 def get_output(filename: str) -> FileResponse:
     return FileResponse(_safe_file(OUTPUT_DIR, filename))
@@ -265,7 +293,7 @@ def get_model_file(run: str, filename: str) -> FileResponse:
 @app.post("/api/detect/image/{filename}", summary="推理图片")
 def detect_image(
     filename: str,
-    conf: float = 0.25,
+    conf: float = 0.38,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
     imgsz: int = 640,
@@ -317,7 +345,7 @@ def detect_image(
 @app.post("/api/detect/video/{filename}", summary="推理视频（后台任务）")
 def detect_video(
     filename: str,
-    conf: float = 0.25,
+    conf: float = 0.38,
     stride: int = 1,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
@@ -453,7 +481,7 @@ def get_annotate_image(filename: str):
 @app.post("/api/annotate/prelabel/{filename:path}", summary="标注器：对当前图片做预标注")
 def prelabel_image(
     filename: str,
-    conf: float = 0.25,
+    conf: float = 0.38,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
     imgsz: int = 640,
@@ -574,10 +602,13 @@ def cancel_job(job_id: str) -> dict:
 
 @app.delete("/api/outputs/{filename}", summary="删除推理结果视频")
 def delete_output(filename: str) -> dict:
-    """删除 data/outputs/ 里的推理结果视频"""
+    """删除 data/outputs/ 里的推理结果视频（连同折线图数据侧车 json）"""
     path = _safe_file(OUTPUT_DIR, filename)
     try:
         path.unlink()
+        # 折线图数据侧车（<视频stem>.json）
+        side = vision.OUTPUT_DIR / "frames" / f"{Path(filename).stem}.json"
+        side.unlink(missing_ok=True)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
     logger.info("已删除推理结果：%s", filename)

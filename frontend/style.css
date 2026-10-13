@@ -76,6 +76,16 @@ body {
   margin-bottom: 10px;
 }
 
+/* 人数折线图独立面板（视频页） */
+.chart-panel[hidden] { display: none; }
+.chart-panel-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: #80868b;
+  margin-left: 4px;
+}
+.chart-panel .headchart { margin-top: 0; }
+
 /* 拖拽区 */
 .drop {
   border: 2px dashed #c8ccd4;
@@ -289,6 +299,63 @@ input[type="number"] { width: 88px; }
   display: block;
   margin-bottom: 10px;
 }
+
+/* ---- 人数折线图（每帧 head 计数，剪辑时间轴式横向滚动 + Ctrl 缩放） ---- */
+.headchart {
+  margin-top: 6px;
+  border: 1px solid #eceff1;
+  border-radius: 10px;
+  background: #fafbfc;
+  overflow: hidden;
+}
+.headchart-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 12px 0;
+  font-size: 13px;
+  color: #3c4043;
+}
+.headchart-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: #9aa0a6;
+}
+.headchart-scroll {
+  overflow-x: auto;
+  padding: 10px 0 6px;
+  cursor: grab;
+  /* 时间轴风格：细滚动条 */
+  scrollbar-width: thin;
+}
+.headchart-scroll:active { cursor: grabbing; }
+.headchart-track { min-width: 100%; }
+.headchart-track svg.hg-svg { display: block; }
+.hg-grid { stroke: #e2e6ea; stroke-width: 1; }
+.hg-line {
+  stroke: #d93025;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.hg-y { font: 10px system-ui, "Microsoft YaHei", sans-serif; fill: #80868b; text-anchor: end; }
+.hg-x { font: 10px system-ui, "Microsoft YaHei", sans-serif; fill: #9aa0a6; text-anchor: middle; }
+/* 悬停十字线 + 数据点 + 人数气泡 */
+.hg-cursor { stroke: #1a73e8; stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
+.hg-dot { fill: #d93025; stroke: #fff; stroke-width: 1.5; }
+.hg-tip-bg { fill: rgba(32, 33, 36, .9); }
+.hg-tip-tx { font: 10px system-ui, "Microsoft YaHei", sans-serif; fill: #fff; }
+/* 拖动平移时禁用文本选中，光标变成抓手 */
+.headchart-scroll.dragging { cursor: grabbing; user-select: none; }
+.headchart-scroll.dragging .hg-cursor,
+.headchart-scroll.dragging .hg-tip { display: none !important; }
+.headchart-empty {
+  padding: 24px;
+  text-align: center;
+  color: #9aa0a6;
+  font-size: 12px;
+}
 /* 结果图单独子页面后，可以放得更大（尺寸由 .viewer > img.base 控制） */
 .result-head {
   font-size: 14px;
@@ -429,6 +496,14 @@ input[type="number"] { width: 88px; }
   z-index: 3;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, .9);
 }
+/* 实心框：完全不透明填充（--c-soft）+ 实线边框，hover 高亮时再加深 */
+.bbox.fill {
+  background: var(--c-soft, #1a73e8);
+}
+.bbox.fill:hover,
+.bbox.fill.hl {
+  background: var(--c-soft, #1557b0);
+}
 /* 幽灵框：中心点模式下 hover 那个点才浮现，用来看清它的实际范围 */
 .bbox.ghost {
   border-style: dashed;
@@ -500,7 +575,7 @@ input[type="number"] { width: 88px; }
 .viewer-foot a:hover { text-decoration: underline; }
 
 .det-table-wrap { max-height: 170px; overflow: auto; margin-top: 6px; }
-#detTableBody tr.hl { background: #e8f0fe; }
+.det-table-wrap [data-role="tablebody"] tr.hl { background: #e8f0fe; }
 .empty-inline { font-size: 12px; color: #9aa0a6; }
 .result-box table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
 .result-box th, .result-box td {
