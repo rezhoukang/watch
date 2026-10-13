@@ -300,7 +300,7 @@ def detect_image(
         "summary": summary,
         "detections": detections,
         "mode": "world" if is_world_weights(weights) else "yolo",
-        "model": Path(weights).name,
+        "weight": Path(weights).name,
         "classes_used": classes_used,
     }
 

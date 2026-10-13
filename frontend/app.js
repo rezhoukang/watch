@@ -146,10 +146,10 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 /* ==================== 环境状态 / 模型模式（普通 YOLO ↔ YOLO-World）==================== */
 
-let WORLD_MODELS = [];   // 属于 YOLO-World 的权重文件名（由后端告知）
-let DEFAULT_MODEL = 'yolov8s-worldv2.pt';   // 下拉框默认选中（后端 status 覆盖）
+let WORLD_WEIGHTS = [];   // 属于 YOLO-World 的权重文件名（由后端告知）
+let DEFAULT_WEIGHTS = 'yolov8s-worldv2.pt';   // 下拉框默认选中（后端 status 覆盖）
 
-/** 填充下拉框，并尽量保留原选择；无选择时用 preferred（默认模型） */
+/** 填充下拉框，并尽量保留原选择；无选择时用 preferred（默认权重） */
 function fillSelect(id, names, preferred = '') {
   const sel = el(id);
   const cur = sel.value;
@@ -171,7 +171,7 @@ function fillSelect(id, names, preferred = '') {
 /** 只有 World 权重才需要填 prompt，普通 YOLO 的类别是权重内置的，直接隐藏输入框 */
 function syncModeUi(selId, wrapId) {
   const name = el(selId).value || '';
-  el(wrapId).hidden = !WORLD_MODELS.includes(name);
+  el(wrapId).hidden = !WORLD_WEIGHTS.includes(name);
 }
 
 async function loadEnv() {
@@ -181,14 +181,14 @@ async function loadEnv() {
     badge.textContent = s.message;
     badge.className = 'badge ' + (s.available ? 'ok' : 'err');
 
-    WORLD_MODELS = s.world_models || [];
-    DEFAULT_MODEL = s.default_model || DEFAULT_MODEL;
+    WORLD_WEIGHTS = s.world_weights || [];
+    DEFAULT_WEIGHTS = s.default_weights || DEFAULT_WEIGHTS;
 
-    const all = s.models.length ? s.models : [DEFAULT_MODEL];
-    fillSelect('detWeights', all, DEFAULT_MODEL);   // 图片推理：全部模型
-    fillSelect('vidWeights', all, DEFAULT_MODEL);   // 视频推理：全部模型
-    fillSelect('trainWeights', all, DEFAULT_MODEL); // 训练：全部模型（含 World，迁移起点与推理一致）
-    fillSelect('annWeights', all, DEFAULT_MODEL);   // 标注器：全部模型（与推理一致）
+    const all = s.weights.length ? s.weights : [DEFAULT_WEIGHTS];
+    fillSelect('detWeights', all, DEFAULT_WEIGHTS);   // 图片推理：全部权重
+    fillSelect('vidWeights', all, DEFAULT_WEIGHTS);   // 视频推理：全部权重
+    fillSelect('trainWeights', all, DEFAULT_WEIGHTS); // 训练：全部权重（含 World，迁移起点与推理一致）
+    fillSelect('annWeights', all, DEFAULT_WEIGHTS);   // 标注器：全部权重（与推理一致）
 
     syncModeUi('detWeights', 'detClassesWrap');
     syncModeUi('vidWeights', 'vidClassesWrap');
@@ -199,7 +199,7 @@ async function loadEnv() {
   }
 }
 
-// 切换模型 → 立即更新 prompt 输入框的显隐
+// 切换权重 → 立即更新 prompt 输入框的显隐
 el('detWeights').addEventListener('change', () =>
   syncModeUi('detWeights', 'detClassesWrap')
 );
@@ -212,8 +212,8 @@ el('annWeights').addEventListener('change', () =>
 
 /** 读取当前推理设置（图片/视频共用） */
 function readDetectOptions(prefix) {
-  const weights = el(`${prefix}Weights`).value || DEFAULT_MODEL;
-  const isWorld = WORLD_MODELS.includes(weights);
+  const weights = el(`${prefix}Weights`).value || DEFAULT_WEIGHTS;
+  const isWorld = WORLD_WEIGHTS.includes(weights);
   const classes = isWorld ? el(`${prefix}Classes`).value.trim() : '';
   return { weights, isWorld, classes };
 }
@@ -410,7 +410,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz) {
 
   box.innerHTML =
     `<div class="result-head">${esc(filename)}` +
-      `<span class="meta">${esc(modeLabel)}｜${esc(r.model || '')}｜${esc(clsNote)}｜` +
+      `<span class="meta">${esc(modeLabel)}｜${esc(r.weight || '')}｜${esc(clsNote)}｜` +
       `推理阈值 ${esc(confUsed)}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
     `<div class="viewer-bar">` +
       `<div class="seg" id="detShape">` +
@@ -1212,7 +1212,7 @@ el('trainBtn').addEventListener('click', async () => {
 
   const params = new URLSearchParams({
     dataset,
-    weights: el('trainWeights').value || DEFAULT_MODEL,
+    weights: el('trainWeights').value || DEFAULT_WEIGHTS,
     epochs: el('trainEpochs').value,
     imgsz: el('trainImgsz').value,
     batch: el('trainBatch').value,

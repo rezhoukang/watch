@@ -128,19 +128,19 @@ def _clamp_conf(conf: float) -> float:
 @app.get("/api/yolo/status", summary="YOLO 环境状态")
 def yolo_status() -> dict:
     available, message = vision.yolo_available()
-    models: list[str] = []
-    world_models: list[str] = []
+    weights: list[str] = []
+    world_weights: list[str] = []
     if MODELS_DIR.is_dir():
         for p in sorted(MODELS_DIR.glob("*.pt")):
-            models.append(p.name)
+            weights.append(p.name)
             if vision.is_world_weights(p.name):
-                world_models.append(p.name)
+                world_weights.append(p.name)
     return {
         "available": available,
         "message": message,
-        "models": models,
-        "world_models": world_models,           # 属于 YOLO-World 的权重
-        "default_model": vision.DEFAULT_WEIGHTS,  # 前端下拉框默认选中它
+        "weights": weights,
+        "world_weights": world_weights,             # 属于 YOLO-World 的权重
+        "default_weights": vision.DEFAULT_WEIGHTS,  # 前端下拉框默认选中它
         "clip_available": vision.clip_available(),  # World 所需的文本编码器依赖
     }
 
