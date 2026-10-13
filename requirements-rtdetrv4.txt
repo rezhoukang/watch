@@ -1,0 +1,11 @@
+# Optional RT-DETRv4 backend. Reuse the existing torch/torchvision installation.
+# Install torch + torchvision separately if they are not already available.
+safetensors>=0.5
+PyYAML>=6
+numpy>=1.26
+pillow>=10
+faster-coco-eval>=1.6.5
+scipy>=1.13
+tensorboard>=2.18
+calflops==0.3.2
+transformers>=4.56,<6

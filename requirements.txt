@@ -10,3 +10,5 @@ ultralytics>=8.3
 fastapi>=0.115
 uvicorn>=0.32
 python-multipart>=0.0.9
+
+# 可选：RT-DETRv4 图片人头计数见 requirements-rtdetrv4.txt 和 README.md

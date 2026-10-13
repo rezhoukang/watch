@@ -30,6 +30,7 @@ venv/
 # 模型权重
 /models/
 *.pt
+/third_party/
 
 # OS
 .DS_Store

@@ -2,7 +2,7 @@
 
 功能：
   - 图片 / 视频上传保存到 data/
-  - YOLOv8 图片推理、视频推理（后台任务）
+  - YOLOv8 图片推理、视频推理（后台任务）、RT-DETRv4 图片人头计数
   - YOLOv8 模型训练（后台任务）
   - 静态页面（frontend/index.html）映射到 /
 
@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import vision
+import rtdetrv4
 
 # ---------- 日志 ----------
 logging.basicConfig(
@@ -124,6 +125,25 @@ def _clamp_conf(conf: float) -> float:
     return max(0.01, min(conf, 0.99))
 
 
+def _require_image_backend(weights: str) -> None:
+    if rtdetrv4.is_weights(weights):
+        state = rtdetrv4.status()
+        if not state["available"]:
+            raise HTTPException(status_code=503, detail=state["message"])
+        return
+    available, message = vision.yolo_available()
+    if not available:
+        raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
+    ok, reason = vision.world_ready(weights)
+    if not ok:
+        raise HTTPException(status_code=503, detail=reason)
+
+
+def _require_yolo_weights(weights: str) -> None:
+    if rtdetrv4.is_weights(weights):
+        raise HTTPException(status_code=400, detail="RT-DETRv4 当前仅支持图片人数统计，请在图片推理页使用")
+
+
 # ---------- YOLO 状态 ----------
 @app.get("/api/yolo/status", summary="YOLO 环境状态")
 def yolo_status() -> dict:
@@ -135,6 +155,7 @@ def yolo_status() -> dict:
             weights.append(p.name)
             if vision.is_world_weights(p.name):
                 world_weights.append(p.name)
+    head_model = rtdetrv4.status()
     return {
         "available": available,
         "message": message,
@@ -142,7 +163,16 @@ def yolo_status() -> dict:
         "world_weights": world_weights,             # 属于 YOLO-World 的权重
         "default_weights": vision.DEFAULT_WEIGHTS,  # 前端下拉框默认选中它
         "clip_available": vision.clip_available(),  # World 所需的文本编码器依赖
+        "image_weights": weights + [rtdetrv4.WEIGHTS_NAME],
+        "default_image_weights": rtdetrv4.WEIGHTS_NAME if head_model["available"] else vision.DEFAULT_WEIGHTS,
+        "model_labels": {rtdetrv4.WEIGHTS_NAME: rtdetrv4.MODEL_NAME},
+        "rtdetrv4": head_model,
     }
+
+
+@app.get("/api/rtdetrv4/status", summary="RT-DETRv4 人头检测环境状态")
+def rtdetrv4_status() -> dict:
+    return rtdetrv4.status()
 
 
 # ---------- 上传 ----------
@@ -298,13 +328,7 @@ def detect_image(
     classes: str | None = None,
     imgsz: int = 640,
 ) -> dict:
-    available, message = vision.yolo_available()
-    if not available:
-        raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
-
-    ok, reason = vision.world_ready(weights)
-    if not ok:
-        raise HTTPException(status_code=503, detail=reason)
+    _require_image_backend(weights)
 
     conf = _clamp_conf(conf)
     class_list = _parse_classes(classes)
@@ -354,6 +378,7 @@ def detect_video(
     render: str = "box",
     line_width: int = 2,
 ) -> dict:
+    _require_yolo_weights(weights)
     available, message = vision.yolo_available()
     if not available:
         raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
@@ -489,6 +514,7 @@ def prelabel_image(
     """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。
     """
+    _require_yolo_weights(weights)
     img_path = vision.resolve_annotate_image(filename)
     available, message = vision.yolo_available()
     if not available:
@@ -560,6 +586,7 @@ def start_train(
     lr0: float = 0.01,
     weights: str = vision.DEFAULT_WEIGHTS,
 ) -> dict:
+    _require_yolo_weights(weights)
     available, message = vision.yolo_available()
     if not available:
         raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")

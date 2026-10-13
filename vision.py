@@ -1,4 +1,4 @@
-"""YOLOv8 封装：图片推理 / 视频推理 / 模型训练
+"""视觉模型封装：YOLO 图片/视频/训练、RT-DETRv4 图片人头计数
 
 对外只暴露简单函数，模型实例按权重名缓存，避免重复加载。
 ultralytics / torch 采用懒加载：即使依赖未装好，Web 服务也能正常启动。
@@ -9,6 +9,8 @@ import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+import rtdetrv4
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"            # 唯一的权重目录（含自动下载的缓存）
@@ -166,6 +168,8 @@ def get_model(weights: str = DEFAULT_WEIGHTS, classes: list[str] | None = None) 
 
     返回 Any：ultralytics 的类型标注不完整，强类型反而会误报。
     """
+    if rtdetrv4.is_weights(weights):
+        raise ValueError("RT-DETRv4 当前仅支持图片人数统计，请使用 detect_image")
     _ensure_dirs()
     _unify_weights_dir()
     with _lock:
@@ -210,7 +214,7 @@ def clear_model_cache() -> int:
     with _lock:
         n = len(_model_cache)
         _model_cache.clear()
-        return n
+        return n + rtdetrv4.clear_cache()
 
 
 # ---------- 图片推理 ----------
@@ -230,14 +234,16 @@ def detect_image(
 ) -> dict:
     """推理单张图片，保存带框结果，返回推理详情
 
-    classes: 仅对 World 模型生效；为空则使用权重内置类别
+    classes: 仅对 World 模型生效；RT-DETRv4 固定只输出 head
     imgsz:   推理分辨率（会钳制到 320~1920 并对齐 32 的倍数）
     save_result: False 时不写结果图（预标注用，避免污染 results/）
     """
     _ensure_dirs()
+    size = _clamp_imgsz(imgsz)
+    if rtdetrv4.is_weights(weights):
+        return rtdetrv4.detect_image(src, conf, size, RESULTS_DIR, save_result=save_result)
     import cv2
 
-    size = _clamp_imgsz(imgsz)
     model = get_model(weights, classes=classes)
     results = model.predict(
         source=str(src), conf=conf, imgsz=size, device=device_arg(), verbose=False

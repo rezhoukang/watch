@@ -148,6 +148,8 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 let WORLD_WEIGHTS = [];   // 属于 YOLO-World 的权重文件名（由后端告知）
 let DEFAULT_WEIGHTS = 'medium.pt';   // 下拉框默认选中（后端 status 覆盖）
+let MODEL_LABELS = {};
+let RTDETR_STATUS = null;
 
 /** 填充下拉框，并尽量保留原选择；无选择时用 preferred（默认权重） */
 function fillSelect(id, names, preferred = '') {
@@ -161,7 +163,7 @@ function fillSelect(id, names, preferred = '') {
   names.forEach((m) => {
     const o = document.createElement('option');
     o.value = m;
-    o.textContent = m;
+    o.textContent = MODEL_LABELS[m] || m;
     sel.appendChild(o);
   });
   if (cur && names.includes(cur)) sel.value = cur;
@@ -172,6 +174,14 @@ function fillSelect(id, names, preferred = '') {
 function syncModeUi(selId, wrapId) {
   const name = el(selId).value || '';
   el(wrapId).hidden = !WORLD_WEIGHTS.includes(name);
+  if (selId === 'detWeights') {
+    const headMode = name === RTDETR_STATUS?.weight;
+    const hint = el('detModelHint');
+    hint.hidden = !headMode;
+    hint.textContent = headMode
+      ? (RTDETR_STATUS.available ? '按人头统计人数；人体框不计入。可调大 imgsz 检测远处小人头。' : RTDETR_STATUS.message)
+      : '';
+  }
 }
 
 async function loadEnv() {
@@ -183,9 +193,11 @@ async function loadEnv() {
 
     WORLD_WEIGHTS = s.world_weights || [];
     DEFAULT_WEIGHTS = s.default_weights || DEFAULT_WEIGHTS;
+    MODEL_LABELS = s.model_labels || {};
+    RTDETR_STATUS = s.rtdetrv4 || null;
 
     const all = s.weights.length ? s.weights : [DEFAULT_WEIGHTS];
-    fillSelect('detWeights', all, DEFAULT_WEIGHTS);   // 图片推理：全部权重
+    fillSelect('detWeights', s.image_weights || all, s.default_image_weights || DEFAULT_WEIGHTS);
     fillSelect('vidWeights', all, DEFAULT_WEIGHTS);   // 视频推理：全部权重
     fillSelect('trainWeights', all, DEFAULT_WEIGHTS); // 训练：全部权重（含 World，迁移起点与推理一致）
     fillSelect('annWeights', all, DEFAULT_WEIGHTS);   // 标注器：全部权重（与推理一致）
@@ -215,7 +227,7 @@ function readDetectOptions(prefix) {
   const weights = el(`${prefix}Weights`).value || DEFAULT_WEIGHTS;
   const isWorld = WORLD_WEIGHTS.includes(weights);
   const classes = isWorld ? el(`${prefix}Classes`).value.trim() : '';
-  return { weights, isWorld, classes };
+  return { weights, isWorld, classes, isRtdetr: weights === RTDETR_STATUS?.weight };
 }
 
 /* ==================== 上传（图片 / 视频）==================== */
@@ -415,11 +427,12 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   view.q = (sel) => box.querySelector(sel);
   view.qs = (sel) => [...box.querySelectorAll(sel)];
 
-  const modeLabel = r.mode === 'world' ? 'YOLO-World' : '普通 YOLO';
+  view.headCounting = r.mode === 'rtdetrv4';
+  const modeLabel = view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
   const clsNote =
     r.mode === 'world'
       ? `prompt「${(r.classes_used || []).join(', ') || '权重内置'}」`
-      : `内置 ${(r.classes_used || []).length} 类`;
+      : (view.headCounting ? '按人头统计人数' : `内置 ${(r.classes_used || []).length} 类`);
 
   box.innerHTML =
     `<div class="result-head">${esc(filename)}` +
@@ -764,7 +777,9 @@ function paintDetects(view) {
 
   const unit = view.shape === 'dot' ? '个点' : '个框';
   view.q('[data-role="count"]').textContent =
-    `图上 ${shown.length} ${unit} / 共检出 ${view.dets.length} 个` +
+    (view.headCounting
+      ? `人数（当前筛选）${shown.length} 人 / 模型检出 ${view.dets.length} 个人头`
+      : `图上 ${shown.length} ${unit} / 共检出 ${view.dets.length} 个`) +
     (notes.length ? `（${notes.join('；')}）` : '');
 }
 
@@ -841,8 +856,8 @@ async function detectImage(filename) {
     // 1) 先取参数（元素缺失会被 catch 住并显示出来）
     const conf = el('detConf').value || '0.38';
     const imgsz = el('detImgsz').value || '640';
-    const { weights, isWorld, classes } = readDetectOptions('det');
-    const modeText = isWorld
+    const { weights, isWorld, classes, isRtdetr } = readDetectOptions('det');
+    const modeText = isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : '普通 YOLO';
 
