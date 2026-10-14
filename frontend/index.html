@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=39">
+<link rel="stylesheet" href="/style.css?v=40">
 </head>
 <body>
 <div class="app">
@@ -51,6 +51,11 @@
       <label>置信度 <input type="number" id="detConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
       <label>尺寸 imgsz <input type="number" id="detImgsz" value="640" min="320" max="1920" step="32"></label>
       <label>权重 <select id="detWeights"></select></label>
+      <span id="detPoseOptions" hidden>
+        <label>低头 R &lt; <input id="detHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="detHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
+        <label>抬头 R &gt; <input id="detHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="detHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
+        <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
+      </span>
       <label><input type="checkbox" id="detHeadDetection"> head检测</label>
       <label><input type="checkbox" id="detRtdetrBase" disabled> 以 RT-DETR 为基准</label>
       <label title="与任一基准框的 IoU 超过此值时舍弃；调大允许更多重叠框补入">合并 IoU ≤ <input id="detMergeIou" type="number" min="0" max="1" step="0.01" value="0.1" disabled></label>
@@ -115,6 +120,7 @@
         <label><input type="checkbox" id="historySelectAll"> 全选</label>
         <button class="btn small ghost" id="historyClearSelection">取消选择</button>
         <button class="btn small danger" id="historyDeleteSelected" disabled>删除选中记录</button>
+        <button class="btn small ghost" id="historyBehaviorImport" disabled>送去行为标注</button>
         <span id="historySelectionCount" role="status">已选 0 张</span>
       </div>
       <div class="grid" id="inferenceHistoryGrid"></div>
@@ -131,6 +137,11 @@
         <option value="dot">中心点</option>
       </select></label>
       <label>权重 <select id="vidWeights"></select></label>
+      <span id="vidPoseOptions" hidden>
+        <label>低头 R &lt; <input id="vidHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="vidHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
+        <label>抬头 R &gt; <input id="vidHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="vidHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
+        <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
+      </span>
       <label><input type="checkbox" id="vidHeadDetection"> head检测</label>
       <label><input type="checkbox" id="vidRtdetrBase" disabled> 以 RT-DETR 为基准</label>
       <label title="IoU 超过阈值保留基准框，否则补入；调大允许更多重叠">合并 IoU ≤ <input id="vidMergeIou" type="number" min="0" max="1" step="0.01" value="0.1" disabled></label>
@@ -212,6 +223,13 @@
           </select></label>
           <span class="annotate-stat" id="annotateStat"></span>
         </div>
+        <div class="annotate-bar">
+          <label>行为数据集名称 <input id="behaviorDatasetName" value="east_classroom_behavior"></label>
+          <button class="btn small ghost" id="behaviorImportEast">导入东教室 Pose 结果</button>
+          <a class="btn small ghost" id="behaviorExport" hidden download>导出行为标注 JSON</a>
+          <span id="behaviorImportStatus" class="hint" role="status"></span>
+        </div>
+        <p class="hint">行为标注：只导入人体置信度 &gt;0.7 的 Pose 框，举手自动预标，其余选择低头 / 抬头 / 正常 / 无法判断。每人一个状态，可人工纠错。</p>
         <p class="hint">点缩略图进入全屏标注 → 预标注 → 改框/加框 → 保存。</p>
         <div id="annotateGrid" class="grid annotate-grid"></div>
       </div>
@@ -233,6 +251,11 @@
           <label title="关掉后连 hover 也不显示类别标签，只显示框"><input type="checkbox" id="annShowLabels" checked> 标签</label>
           <label>置信度 <input type="number" id="annConf" value="0.38" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
           <label>权重 <select id="annWeights"></select></label>
+          <span id="annPoseOptions" hidden>
+            <label>低头 R &lt; <input id="annHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="annHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
+            <label>抬头 R &gt; <input id="annHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="annHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
+            <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
+          </span>
           <label><input type="checkbox" id="annHeadDetection"> head检测</label>
           <label><input type="checkbox" id="annRtdetrBase" disabled> 以 RT-DETR 为基准</label>
           <label title="IoU 超过阈值保留基准框，否则补入">合并 IoU ≤ <input id="annMergeIou" type="number" min="0" max="1" step="0.01" value="0.1" disabled></label>
@@ -280,6 +303,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=62"></script>
+<script type="module" src="/app.js?v=66"></script>
 </body>
 </html>

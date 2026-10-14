@@ -97,7 +97,8 @@ def complete_record(record_id: str, src: Path, result: dict, parameters: dict, *
     if any(det.get("keypoints") for det in record["detections"]):
         import pose_support
 
-        record["pose"] = pose_support.metadata()
+        if not record.get("pose"):
+            record["pose"] = pose_support.metadata()
         pose_support.draw_pil(image, record["detections"])
         image.putalpha(original_alpha)
     image.save(directory / "result.png")

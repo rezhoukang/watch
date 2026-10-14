@@ -146,16 +146,39 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   viewer.querySelector('[data-role="delete-record"]').events.click();
   assert.equal(deleted, 'example');
   const keypoints = Array.from({ length: 17 }, () => [0, 0, 0]);
+  for (const prefix of ['det', 'vid', 'ann']) {
+    nodes.get(`${prefix}Weights`).value = 'yolov8m-pose.pt';
+    nodes.get(`${prefix}Weights`).events.change();
+    assert.equal(nodes.get(`${prefix}PoseOptions`).hidden, false);
+    for (const [direction, value] of [['Down', '0.1'], ['Up', '0.4']]) {
+      nodes.get(`${prefix}Head${direction}RSlider`).value = value;
+      nodes.get(`${prefix}Head${direction}RSlider`).events.input();
+      assert.equal(nodes.get(`${prefix}Head${direction}R`).value, value);
+      const field = direction === 'Down' ? 'headDownRThreshold' : 'headUpRThreshold';
+      assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix)[field], Number(value));
+      nodes.get(`${prefix}Head${direction}R`).value = value;
+      nodes.get(`${prefix}Head${direction}R`).events.input();
+      assert.equal(nodes.get(`${prefix}Head${direction}RSlider`).value, value);
+    }
+    nodes.get(`${prefix}HeadDownR`).value = '0.5';
+    assert.throws(() => modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix), /低头 R 阈值必须小于抬头 R 阈值/);
+    nodes.get(`${prefix}HeadDownR`).value = '0.1';
+    nodes.get(`${prefix}Weights`).value = 'medium.pt';
+    nodes.get(`${prefix}Weights`).events.change();
+    assert.equal(nodes.get(`${prefix}PoseOptions`).hidden, true);
+  }
   keypoints[5] = [20, 30, 0.9]; keypoints[7] = [40, 50, 0.8]; keypoints[9] = [70, 60, 0.2];
   keypoints[11] = [80, 70, 0.9];
   modules.get(path.join(root, 'js/viewer.js')).namespace.renderDetectResult({
     mode: 'pose', pose: { skeleton: [[5, 7], [7, 9]], keypoint_confidence: 0.5 },
-    detections: [{ class_name: 'person', confidence: 0.9, bbox: [10, 10, 90, 70], keypoints }],
+    detections: [{ class_name: 'person', confidence: 0.9, bbox: [10, 10, 90, 70], keypoints, behavior: { state: '抬头' } }],
   }, 'pose.png', 0.38, 0, 640);
   const poseLayer = viewer.querySelector('[data-role="boxes"]').children.find((node) => node.className === 'pose-layer');
   assert(poseLayer.innerHTML.includes('<line x1="20" y1="30" x2="40" y2="50"/>'));
   assert(!poseLayer.innerHTML.includes('cx="70"'));
   assert(!poseLayer.innerHTML.includes('cx="80"'));
+  assert(viewer.querySelector('[data-role="count"]').textContent.includes('抬头 1 人'));
+  assert(viewer.querySelector('[data-role="tablebody"]').children.some(row => row.innerHTML.includes('抬头')));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
   assert.equal(nodes.has('globalBanner'), false);

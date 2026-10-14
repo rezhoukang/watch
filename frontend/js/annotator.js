@@ -1,6 +1,7 @@
-import { el, esc, api, banner, showError } from './core.js?v=62';
-import { readDetectOptions } from './models.js?v=62';
-import { classColor, classColorA } from './viewer.js?v=62';
+import { el, esc, api, banner, showError } from './core.js?v=66';
+import { readDetectOptions } from './models.js?v=66';
+import { classColor, classColorA, createPoseLayer } from './viewer.js?v=66';
+import { loadDatasets } from './training.js?v=66';
 
 /* ==================== 标注（全屏标注器）====================
  * 入口：训练页「标注数据」区选数据集 + Train/Val → 点缩略图进入全屏标注器。
@@ -29,6 +30,8 @@ async function loadAnnotateGrid() {
   grid.innerHTML = '<div class="empty">加载中…</div>';
   try {
     const data = await api(`/api/datasets/${encodeURIComponent(ds)}`, {}, 20000);
+    el('behaviorExport').hidden = !data.behavior;
+    el('behaviorExport').href = `/api/behavior-datasets/${encodeURIComponent(ds)}/export`;
     const sub = (data.subsets && data.subsets[split]) || null;
     if (!sub || !sub.count) {
       grid.innerHTML = `<div class="empty">该子集没有图片（${esc(ds)}/images/${esc(split)}）</div>`;
@@ -36,6 +39,7 @@ async function loadAnnotateGrid() {
       return;
     }
     stat.textContent = `${sub.count} 张 · 已标注 ${sub.labeled} 张 · ${(data.classes || []).length} 类`;
+    if (data.behavior) stat.textContent += `｜行为已标 ${data.behavior.labeled}/${data.behavior.total} 人（举手 ${data.behavior.counts['举手']}）`;
 
     // 已标注状态按需读取（点开图片后才知），这里只列缩略图
     grid.innerHTML = '';
@@ -76,6 +80,7 @@ async function openAnnotator(ds, split, filename) {
     filter: null,      // 只看某一类（null = 全部）
     confMin: 0,
     dirty: false,
+    behavior: false, pose: null,
   };
 
   mask.hidden = false;
@@ -97,7 +102,11 @@ async function openAnnotator(ds, split, filename) {
       60000
     );
     ANN.dsClasses = data.classes || [];
+    ANN.behavior = !!data.behavior;
+    ANN.pose = data.pose || null;
+    el('annPrelabel').disabled = ANN.behavior;
     ANN.dets = (data.detections || []).map((d) => ({
+      ...d,
       class_id: d.class_id,
       class_name: d.class_name,
       confidence: d.confidence,
@@ -117,7 +126,7 @@ async function openAnnotator(ds, split, filename) {
 
     paintAnnClasses();
     paintAnn();
-    annMsg('');
+    annMsg(ANN.behavior ? '每人选一个状态。举手已自动预标，可人工纠错。选中框后：1 低头 / 2 抬头 / 3 正常 / 4 无法判断 / 5 举手。改完点保存。' : '');
   } catch (e) {
     annMsg(`载入失败：${e instanceof Error ? e.message : String(e)}`);
   }
@@ -159,7 +168,7 @@ function paintAnnClasses() {
     });
 
     row.appendChild(b);
-    row.appendChild(ed);
+    if (!ANN.behavior) row.appendChild(ed);
     box.appendChild(row);
   });
 
@@ -174,7 +183,7 @@ function paintAnnClasses() {
     ev.stopPropagation();
     void addClass();
   });
-  box.appendChild(add);
+  if (!ANN.behavior) box.appendChild(add);
 }
 
 /** 新增一个类别：追加到末尾 → class_id 顺延，不影响已有 label */
@@ -293,7 +302,7 @@ function paintAnn() {
     const rn = document.createElement('option');
     rn.value = RENAME_OPT;
     rn.textContent = '✎ 重命名本类…';
-    sel.appendChild(rn);
+    if (!ANN.behavior) sel.appendChild(rn);
     sel.addEventListener('change', (ev) => {
       ev.stopPropagation();
       if (sel.value === RENAME_OPT) {
@@ -362,6 +371,14 @@ function paintAnn() {
     wrap.appendChild(node);
   });
 
+  if (ANN.pose) wrap.appendChild(createPoseLayer(visible.map(i => ANN.dets[i]), ANN.pose, ANN.naturalW, ANN.naturalH));
+  const list = el('annList'); list.innerHTML = '';
+  if (ANN.behavior) visible.forEach(i => {
+    const button = document.createElement('button');
+    button.className = 'btn small ghost'; button.textContent = `#${i+1} ${ANN.dets[i].class_name}`;
+    button.addEventListener('click', () => { ANN.active = i; syncAnnActive(); });
+    list.appendChild(button);
+  });
   el('annCount').textContent = `${visible.length}/${ANN.dets.length}`;
   el('annDeleteAll').disabled = !ANN.dets.length;
   el('annSave').textContent = ANN.dirty ? '保存 *' : '保存';
@@ -530,7 +547,7 @@ el('annPrelabel').addEventListener('click', async () => {
   btn.disabled = true;
   annMsg('预标注中…（首次要加载模型，可能较慢）');
   try {
-    const { weights, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence } = readDetectOptions('ann');
+    const { weights, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, isPose } = readDetectOptions('ann');
     const q = new URLSearchParams({
       conf: el('annConf').value || '0.38',
       weights,
@@ -538,6 +555,7 @@ el('annPrelabel').addEventListener('click', async () => {
     });
     if (classes) q.set('classes', classes);
     if (headDetection) q.set('head_detection', 'true');
+    if (isPose) { q.set('head_down_r_threshold', String(headDownRThreshold)); q.set('head_up_r_threshold', String(headUpRThreshold)); }
     if (headDetection) q.set('merge_iou', String(mergeIou));
     if (headDetection) q.set('merge_confidence', String(mergeConfidence));
     if (rtdetrBase) q.set('rtdetr_base', 'true');
@@ -598,12 +616,13 @@ el('annSave').addEventListener('click', async () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          detections: ANN.dets.map((d) => ({ class_id: d.class_id, bbox: d.bbox })),
+          detections: ANN.dets.map((d) => ({ class_id: d.class_id, bbox: d.bbox, sample_id: d.sample_id })),
         }),
       },
       60000
     );
     ANN.dirty = false;
+    if (Array.isArray(res.detections)) ANN.dets = res.detections;
     paintAnn();
     annMsg(`已保存 ${res.count} 个标注 → ${res.label}`);
     loadAnnotateGrid();   // 刷新网格里的已标注数量
@@ -632,6 +651,11 @@ document.addEventListener('keydown', (ev) => {
   const tag = t && t.tagName ? String(t.tagName).toUpperCase() : '';
   // 焦点在输入框/下拉框里时，键盘事件交给控件自己处理
   const typing = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
+  if (ANN.behavior && !typing && ANN.active >= 0 && /^[1-5]$/.test(ev.key)) {
+    const det = ANN.dets[ANN.active];
+    det.class_id = Number(ev.key); det.class_name = ANN.dsClasses[det.class_id];
+    ANN.dirty = true; ev.preventDefault(); paintAnn(); return;
+  }
   if (ev.key === 'Escape') {
     if (typing) return;      // 只收起下拉框，不要连带关掉整个标注器
     closeAnnotator();
@@ -649,4 +673,24 @@ document.addEventListener('keydown', (ev) => {
 });
 
 
-export { loadAnnotateGrid };
+async function importBehaviorRecords(recordIds = null) {
+  const payload = { dataset: el('behaviorDatasetName').value.trim() || 'east_classroom_behavior' };
+  if (recordIds) payload.record_ids = recordIds;
+  const result = await api('/api/behavior-datasets/import', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  }, 60000);
+  await loadDatasets();
+  el('annotateDataset').value = result.dataset; el('annotateSplit').value = 'train';
+  document.querySelector('.tab[data-tab="dataset"]').click();
+  await loadAnnotateGrid();
+  el('behaviorImportStatus').textContent = `新增 ${result.imported} 张，已存在 ${result.skipped} 张；共 ${result.progress.total} 人。`;
+  return result;
+}
+el('behaviorImportEast').addEventListener('click', async () => {
+  const button = el('behaviorImportEast'); button.disabled = true;
+  try { await importBehaviorRecords(); }
+  catch (error) { banner(error instanceof Error ? error.message : String(error)); }
+  finally { button.disabled = false; }
+});
+
+export { loadAnnotateGrid, importBehaviorRecords };

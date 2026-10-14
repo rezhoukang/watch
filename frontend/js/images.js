@@ -1,8 +1,9 @@
-import { el, esc, api, banner, showError } from './core.js?v=62';
-import { readDetectOptions } from './models.js?v=62';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=62';
-import { switchSubPane } from './navigation.js?v=62';
-import { renderDetectResult } from './viewer.js?v=62';
+import { el, esc, api, banner, showError } from './core.js?v=66';
+import { readDetectOptions } from './models.js?v=66';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=66';
+import { switchSubPane } from './navigation.js?v=66';
+import { renderDetectResult } from './viewer.js?v=66';
+import { importBehaviorRecords } from './annotator.js?v=66';
 
 /* ==================== 图片推理 ==================== */
 
@@ -21,6 +22,7 @@ function syncGallerySelection(kind) {
   all.disabled = busy || !state.items.length;
   el(`${state.prefix}DeleteSelected`).disabled = busy || !state.selected.size;
   el(`${state.prefix}ClearSelection`).disabled = busy || !state.selected.size;
+  if (kind === 'history') el('historyBehaviorImport').disabled = busy || !state.selected.size;
   el(`${state.prefix}SelectionCount`).textContent = state.busy ? '正在删除…' : `已选 ${state.selected.size} 张`;
   document.querySelectorAll(`#${state.grid} figure`).forEach((figure) => {
     const selected = state.selected.has(figure.dataset.item);
@@ -128,7 +130,7 @@ async function detectImage(filename) {
     const headDetection = !!el('detHeadDetection').checked;
     const conf = headDetection ? '0.45' : el('detConf').value || '0.38';
     const imgsz = headDetection ? '640' : el('detImgsz').value || '640';
-    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
+    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, headDownRThreshold, headUpRThreshold, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
     const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';
@@ -153,6 +155,7 @@ async function detectImage(filename) {
       `/api/detect/image/${encodeURIComponent(filename)}` +
       `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}` +
       `&imgsz=${encodeURIComponent(imgsz)}` +
+      (isPose ? `&head_down_r_threshold=${encodeURIComponent(headDownRThreshold)}&head_up_r_threshold=${encodeURIComponent(headUpRThreshold)}` : '') +
       (headDetection ? `&head_detection=true&merge_iou=${encodeURIComponent(mergeIou)}&merge_confidence=${encodeURIComponent(mergeConfidence)}` : '') +
       (rtdetrBase ? '&rtdetr_base=true' : '') +
       (classes ? `&classes=${encodeURIComponent(classes)}` : '');
@@ -401,6 +404,13 @@ el('mergeInferenceBtn').addEventListener('click', async () => {
 
 
 function setActiveInference(recordId) { ACTIVE_INFERENCE_ID = recordId; }
+
+el('historyBehaviorImport').addEventListener('click', async () => {
+  const button = el('historyBehaviorImport'); button.disabled = true;
+  try { await importBehaviorRecords([...GALLERY_STATE.history.selected]); }
+  catch (error) { banner(error instanceof Error ? error.message : String(error)); }
+  finally { syncGallerySelection('history'); }
+});
 
 function renderImageResult(record, filename, confidence, elapsed, imgsz) {
   renderDetectResult(record, filename, confidence, elapsed, imgsz, {

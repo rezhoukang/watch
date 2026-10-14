@@ -1,6 +1,7 @@
 """datasets: extracted API routes; URLs and response formats are unchanged."""
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+import behavior_annotations
 import vision
 import head_fusion
 from . import common
@@ -20,7 +21,10 @@ def dataset_detail(name: str) -> dict:
     ds_dir = vision.DATASETS_DIR / name
     if not ds_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"数据集不存在：{name}")
-    return vision.dataset_detail(ds_dir)
+    detail = vision.dataset_detail(ds_dir)
+    if behavior_annotations.is_behavior(ds_dir):
+        detail["behavior"] = behavior_annotations.progress(ds_dir)
+    return detail
 
 
 @router.put("/api/datasets/{name}/classes", summary="改写数据集类别名")
@@ -34,6 +38,8 @@ def write_dataset_classes(name: str, payload: dict) -> dict:
     if not ds_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"数据集不存在：{name}")
     names = payload.get("classes")
+    if behavior_annotations.is_behavior(ds_dir) and names != behavior_annotations.CLASSES:
+        raise HTTPException(status_code=400, detail="行为数据集使用固定的单状态类别，请直接修改人员状态")
     if not isinstance(names, list):
         raise HTTPException(status_code=400, detail="classes 必须是数组")
     try:
@@ -56,6 +62,7 @@ def annotate_image(filename: str) -> dict:
     labels = vision.read_labels_for_image(img_path)
     ds_dir = vision.find_dataset_dir(img_path)
     classes = vision.dataset_classes(ds_dir)
+    behavior = behavior_annotations.read(img_path) if behavior_annotations.is_behavior(ds_dir) else None
     return {
         "ok": True,
         "dataset": ds_dir.name,
@@ -64,7 +71,8 @@ def annotate_image(filename: str) -> dict:
         "url": f"/api/annotate/raw/{filename}",
         "width": labels["width"],
         "height": labels["height"],
-        "detections": labels["detections"],
+        "detections": behavior["detections"] if behavior else labels["detections"],
+        "behavior": bool(behavior), "pose": behavior["pose"] if behavior else None,
         "classes": classes,
     }
 
@@ -85,15 +93,20 @@ def prelabel_image(
     rtdetr_base: bool = False,
     merge_iou: float = Query(default=head_fusion.DEFAULT_MERGE_IOU, ge=0, le=1),
     merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
+    head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
+    head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
 ) -> dict:
     """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。
     """
+    common._validate_head_thresholds(head_down_r_threshold, head_up_r_threshold)
     if head_detection:
         common._require_head_detection()
         weights, conf, imgsz, classes = head_fusion.BASE_WEIGHTS, head_fusion.BASE_CONFIDENCE, head_fusion.IMAGE_SIZE, None
     common._require_yolo_weights(weights)
     img_path = vision.resolve_annotate_image(filename)
+    if behavior_annotations.is_behavior(vision.find_dataset_dir(img_path)):
+        raise HTTPException(status_code=400, detail="行为数据已从 Pose 结果导入，请修改人员状态并保存，无需重新预标注")
     available, message = vision.yolo_available()
     if not available:
         raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
@@ -109,7 +122,7 @@ def prelabel_image(
     try:
         fused = head_fusion.detect_image(img_path, rtdetr_base=rtdetr_base, merge_iou=merge_iou, merge_confidence=merge_confidence) if head_detection else None
         dets = fused["detections"] if fused is not None else vision.prelabel_image(
-            img_path, weights=weights, conf=conf, classes=class_list, imgsz=imgsz
+            img_path, weights=weights, conf=conf, classes=class_list, imgsz=imgsz, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold
         )
     except Exception as e:  # noqa: BLE001
         common.logger.exception("预标注失败：%s", filename)
@@ -153,6 +166,33 @@ def annotate_save(filename: str, payload: dict) -> dict:
     dets = payload.get("detections", [])
     if not isinstance(dets, list):
         raise HTTPException(status_code=400, detail="detections 必须是数组")
-    saved, lbl_rel = vision.save_labels_for_image(img_path, dets)
+    try:
+        saved, lbl_rel = behavior_annotations.save(img_path, dets) if behavior_annotations.is_behavior(vision.find_dataset_dir(img_path)) else vision.save_labels_for_image(img_path, dets)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     common.logger.info("保存标注：%s → %s（%s 个目标）", filename, lbl_rel, saved)
-    return {"ok": True, "count": saved, "label": lbl_rel}
+    result = {"ok": True, "count": saved, "label": lbl_rel}
+    if behavior_annotations.is_behavior(vision.find_dataset_dir(img_path)):
+        behavior = behavior_annotations.read(img_path)
+        assert behavior is not None
+        result["detections"] = behavior["detections"]
+    return result
+
+
+@router.post("/api/behavior-datasets/import", summary="将 Pose 推理记录导入行为标注数据集")
+def import_behavior_dataset(payload: dict) -> dict:
+    try:
+        return behavior_annotations.import_records(payload.get("dataset", behavior_annotations.DEFAULT_DATASET), payload.get("record_ids"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="Pose 推理记录不存在") from e
+
+
+@router.get("/api/behavior-datasets/{name}/export", summary="导出状态标注及原始 Pose 关键点")
+def export_behavior_dataset(name: str) -> JSONResponse:
+    try:
+        data = behavior_annotations.export(name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="behavior_annotations.json"'})

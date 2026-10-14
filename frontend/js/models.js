@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=62';
+import { el, api } from './core.js?v=66';
 
 /* ==================== 环境状态 ==================== */
 
@@ -31,6 +31,7 @@ function fillSelect(id, names, preferred = '') {
 /** 只有 World 权重才需要填 prompt，普通 YOLO 的类别是权重内置的，直接隐藏输入框 */
 function syncModeUi(selId, wrapId) {
   const prefix = selId.replace('Weights', '');
+  el(`${prefix}PoseOptions`).hidden = el(`${prefix}HeadDetection`).checked || !el(selId).value.toLowerCase().includes('pose');
   if (el(`${prefix}HeadDetection`).checked) {
     el(wrapId).hidden = true;
     el(`${prefix}ModelHint`).hidden = false;
@@ -106,9 +107,13 @@ function readDetectOptions(prefix) {
   const classes = !headDetection && isWorld ? el(`${prefix}Classes`).value.trim() : '';
   const mergeIou = headDetection ? Number(el(`${prefix}MergeIou`).value || '0.1') : 0;
   const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || '0.45') : 0;
+  const headDownRThreshold = Number(el(`${prefix}HeadDownR`).value || '0.05');
+  const headUpRThreshold = Number(el(`${prefix}HeadUpR`).value || '0.20');
+  if ([headDownRThreshold, headUpRThreshold].some(v => !Number.isFinite(v) || v < -1 || v > 1)) throw new Error('低头和抬头 R 阈值必须在 -1 到 1 之间');
+  if (headDownRThreshold >= headUpRThreshold) throw new Error('低头 R 阈值必须小于抬头 R 阈值');
   if (!Number.isFinite(mergeIou) || mergeIou < 0 || mergeIou > 1) throw new Error('合并 IoU 阈值必须在 0 到 1 之间');
   if (!Number.isFinite(mergeConfidence) || mergeConfidence < 0 || mergeConfidence > 1) throw new Error('自定义 IoU 的置信度门槛必须在 0 到 1 之间');
-  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
+  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
 }
 
 const previousHeadOptions = new Map();
@@ -129,6 +134,14 @@ function syncHeadDetection(prefix) {
   syncModeUi(`${prefix}Weights`, `${prefix}ClassesWrap`);
 }
 ['det', 'vid', 'ann'].forEach((prefix) => {
+  ['Down', 'Up'].forEach(direction => {
+    const slider = el(`${prefix}Head${direction}RSlider`), number = el(`${prefix}Head${direction}R`);
+    slider.addEventListener('input', () => { number.value = slider.value; });
+    number.addEventListener('input', () => {
+      const value = Number(number.value);
+      if (number.value !== '' && Number.isFinite(value) && value >= -1 && value <= 1) slider.value = number.value;
+    });
+  });
   el(`${prefix}HeadDetection`).addEventListener('change', () => syncHeadDetection(prefix));
   el(`${prefix}RtdetrBase`).addEventListener('change', () => syncModeUi(`${prefix}Weights`, `${prefix}ClassesWrap`));
   el(`${prefix}MergeIou`).addEventListener('input', () => syncModeUi(`${prefix}Weights`, `${prefix}ClassesWrap`));

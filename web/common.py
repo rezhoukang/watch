@@ -11,6 +11,15 @@ import rtdetrv4
 
 logger = logging.getLogger("watch")
 
+
+def _validate_head_thresholds(down: float, up: float) -> None:
+    import pose_behaviors
+
+    try:
+        pose_behaviors.validate_thresholds(down, up)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
 from project_paths import (
     STATIC_DIR, UPLOAD_DIR, VIDEO_DIR, RESULTS_DIR, OUTPUT_DIR, MODELS_DIR,
     IMAGE_EXTENSIONS, VIDEO_EXTENSIONS,

@@ -1,6 +1,6 @@
-import { el, esc, api, showError } from './core.js?v=62';
-import { DEFAULT_WEIGHTS, loadEnv } from './models.js?v=62';
-import { pollJob } from './jobs.js?v=62';
+import { el, esc, api, showError } from './core.js?v=66';
+import { DEFAULT_WEIGHTS, loadEnv } from './models.js?v=66';
+import { pollJob } from './jobs.js?v=66';
 
 /* ==================== 训练 ==================== */
 
@@ -8,6 +8,7 @@ async function loadDatasets() {
   const box = el('datasetList');
   const sel = el('trainDataset');
   const annSel = el('annotateDataset');
+  const previous = [sel.value, annSel.value];
   try {
     const data = await api('/api/datasets');
     sel.innerHTML = '';
@@ -33,6 +34,9 @@ async function loadDatasets() {
         o.textContent = d.name;
         s.appendChild(o);
       }
+    });
+    [sel, annSel].forEach((select, i) => {
+      if (data.datasets.some(d => d.name === previous[i])) select.value = previous[i];
     });
   } catch (e) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e instanceof Error ? e.message : String(e))}</div>`;

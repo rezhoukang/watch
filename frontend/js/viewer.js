@@ -1,4 +1,4 @@
-import { el, esc } from './core.js?v=62';
+import { el, esc } from './core.js?v=66';
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 
@@ -70,7 +70,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   const baseConf = r.parameters?.base?.confidence ?? (rtdetrBase ? 0.2 : 0.45);
   const incomingConf = r.parameters?.incoming?.confidence ?? (rtdetrBase ? 0.45 : 0.2);
   const rtConf = rtdetrBase ? baseConf : incomingConf;
-  const modeLabel = r.fusion ? `head检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : r.pose ? 'YOLO Pose 人体骨架' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
+  const modeLabel = r.fusion ? `head检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : r.pose ? `YOLO Pose 人体骨架｜${r.pose.head_rule?.head_down_r_threshold != null ? `低头 R < ${r.pose.head_rule.head_down_r_threshold}，抬头 R > ${r.pose.head_rule.head_up_r_threshold}` : `R 阈值 ${r.pose.head_rule?.nose_shoulder_threshold ?? 0.13}`}${r.pose.exclude_unknown ? '｜已排除无法判断者' : ''}` : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
   const clsNote =
     r.mode === 'world'
       ? `prompt「${(r.classes_used || []).join(', ') || '权重内置'}」`
@@ -160,7 +160,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
     const tr = document.createElement('tr');
     tr.dataset.i = String(i);
     tr.innerHTML =
-      `<td>${esc(d.class_name)}</td><td>${esc(d.confidence)}</td>` +
+      `<td>${esc(d.class_name)}${d.behavior?.state ? ` · ${esc(d.behavior.state)}` : ''}</td><td>${esc(d.confidence)}</td>` +
       `<td>${esc(cx)}, ${esc(cy)}</td><td>${esc(w)} × ${esc(h)}</td>` +
       `<td>${esc(x1)}, ${esc(y1)}, ${esc(x2)}, ${esc(y2)}</td>`;
     tr.addEventListener('mouseenter', () => highlightDet(view, i, true));
@@ -249,7 +249,7 @@ function detSize(d) {
 function makeDetTag(d) {
   const tag = document.createElement('span');
   tag.className = 'tag';
-  tag.textContent = `${d.class_name} ${Number(d.confidence).toFixed(2)}`;
+  tag.textContent = `${d.class_name} ${Number(d.confidence).toFixed(2)}${d.behavior?.state ? ` · ${d.behavior.state}` : ''}`;
   return tag;
 }
 
@@ -327,6 +327,23 @@ function bindDetNode(view, node, i) {
 }
 
 /** 按当前筛选条件重画标注（框 / 实心 / 中心点），并同步明细表 */
+function createPoseLayer(detections, pose, width, height) {
+  const overlay = document.createElement('div');
+  overlay.className = 'pose-layer';
+  const parts = [];
+  const valid = (p) => Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) &&
+    p[2] >= pose.keypoint_confidence && p[0] > 0 && p[0] < width && p[1] > 0 && p[1] < height;
+  detections.forEach((det) => {
+    const points = det.keypoints || [];
+    (pose.skeleton || []).forEach(([a, b]) => {
+      if (a < 11 && b < 11 && valid(points[a]) && valid(points[b])) parts.push(`<line x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`);
+    });
+    points.slice(0, 11).filter(valid).forEach(([x, y]) => parts.push(`<circle cx="${x}" cy="${y}" r="2"/>`));
+  });
+  overlay.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="人体姿态骨架">${parts.join('')}</svg>`;
+  return overlay;
+}
+
 function paintDetects(view) {
   if (!view) return;
   const wrap = view.q('[data-role="boxes"]');
@@ -410,20 +427,7 @@ function paintDetects(view) {
   });
 
   if (view.pose && view.showSkeleton) {
-    const overlay = document.createElement('div');
-    overlay.className = 'pose-layer';
-    const parts = [];
-    const valid = (p) => Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) &&
-      p[2] >= view.pose.keypoint_confidence && p[0] > 0 && p[0] < view.naturalW && p[1] > 0 && p[1] < view.naturalH;
-    shown.forEach((i) => {
-      const points = view.dets[i].keypoints || [];
-      (view.pose.skeleton || []).forEach(([a, b]) => {
-        if (a < 11 && b < 11 && valid(points[a]) && valid(points[b])) parts.push(`<line x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`);
-      });
-      points.slice(0, 11).filter(valid).forEach(([x, y]) => parts.push(`<circle cx="${x}" cy="${y}" r="2"/>`));
-    });
-    overlay.innerHTML = `<svg viewBox="0 0 ${view.naturalW} ${view.naturalH}" preserveAspectRatio="none" aria-label="人体姿态骨架">${parts.join('')}</svg>`;
-    wrap.appendChild(overlay);
+    wrap.appendChild(createPoseLayer(shown.map(i => view.dets[i]), view.pose, view.naturalW, view.naturalH));
   }
 
   const visible = new Set(shown);
@@ -452,7 +456,10 @@ function paintDetects(view) {
     (view.headCounting
       ? `人数（当前筛选）${shown.length} 人 / 模型检出 ${view.dets.length} 个人头`
       : `图上 ${shown.length} ${unit} / 共检出 ${view.dets.length} 个`) +
-    (notes.length ? `（${notes.join('；')}）` : '');
+    (notes.length ? `（${notes.join('；')}）` : '') +
+    (view.dets.some(d => d.behavior) ? '｜' + (view.pose?.exclude_unknown ? ['举手', '低头', '抬头'] : ['举手', '低头', '抬头', '无法判断']).map(
+      state => `${state} ${shown.filter(i => view.dets[i].behavior?.state === state).length} 人`
+    ).join(' · ') : '');
 }
 
 /** 标注 ↔ 明细表行 双向高亮；中心点模式下顺带浮现它对应的框 */
@@ -468,4 +475,4 @@ function highlightDet(view, i, on) {
 }
 
 
-export { renderDetectResult, classColor, classColorA };
+export { renderDetectResult, classColor, classColorA, createPoseLayer };

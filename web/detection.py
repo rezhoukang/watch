@@ -22,7 +22,10 @@ def detect_image(
     rtdetr_base: bool = False,
     merge_iou: float = Query(default=head_fusion.DEFAULT_MERGE_IOU, ge=0, le=1),
     merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
+    head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
+    head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
 ) -> dict:
+    common._validate_head_thresholds(head_down_r_threshold, head_up_r_threshold)
     if head_detection:
         common._require_head_detection()
         weights, conf, imgsz, classes = head_fusion.BASE_WEIGHTS, head_fusion.BASE_CONFIDENCE, head_fusion.IMAGE_SIZE, None
@@ -46,13 +49,13 @@ def detect_image(
     try:
         record_id, snapshot = inference_history.begin_record(src)
         result = head_fusion.detect_image(snapshot, rtdetr_base=rtdetr_base, merge_iou=merge_iou, merge_confidence=merge_confidence) if head_detection else vision.detect_image(
-            snapshot, weights=weights, conf=conf, classes=class_list, imgsz=imgsz, save_result=False
+            snapshot, weights=weights, conf=conf, classes=class_list, imgsz=imgsz, save_result=False, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold
         )
         result["elapsed_seconds"] = round(time.perf_counter() - t0, 3)
         result = inference_history.complete_record(
             record_id, snapshot, result,
             head_fusion.parameters(rtdetr_base, merge_iou, merge_confidence) if head_detection else
-            {"confidence": conf, "weights": weights, "classes": class_list, "imgsz": imgsz},
+            {"confidence": conf, "weights": weights, "classes": class_list, "imgsz": imgsz, "head_down_r_threshold": head_down_r_threshold, "head_up_r_threshold": head_up_r_threshold},
             kind="merge" if head_detection else "inference",
         )
     except Exception as e:  # noqa: BLE001
@@ -87,7 +90,10 @@ def detect_video(
     rtdetr_base: bool = False,
     merge_iou: float = Query(default=head_fusion.DEFAULT_MERGE_IOU, ge=0, le=1),
     merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
+    head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
+    head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
 ) -> dict:
+    common._validate_head_thresholds(head_down_r_threshold, head_up_r_threshold)
     if head_detection:
         common._require_head_detection()
         weights, conf, classes = head_fusion.BASE_WEIGHTS, head_fusion.BASE_CONFIDENCE, None
@@ -123,6 +129,7 @@ def detect_video(
             rtdetr_base=rtdetr_base,
             merge_iou=merge_iou,
             merge_confidence=merge_confidence,
+            head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold,
         )
     except Exception as e:  # noqa: BLE001
         common.logger.exception("提交视频推理任务失败：%s", filename)
