@@ -1,6 +1,7 @@
 """COCO 17-keypoint serialization and shared skeleton rendering."""
 import math
 import pose_behaviors
+import pose_roi
 from typing import Any
 
 KEYPOINT_NAMES = ["nose", "left_eye", "right_eye", "left_ear", "right_ear",
@@ -13,12 +14,14 @@ DISPLAY_KEYPOINTS = list(range(11))
 KEYPOINT_CONFIDENCE = 0.5
 
 
-def metadata(head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20) -> dict:
+def metadata(head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
+             roi_enabled: bool = True, roi_confidence: float = 0.6) -> dict:
     return {"keypoint_names": KEYPOINT_NAMES, "skeleton": SKELETON,
             "display_keypoints": DISPLAY_KEYPOINTS, "display_body": "upper",
             "hand_raise_rule": pose_behaviors.RULE,
             "head_rule": {**pose_behaviors.HEAD_RULE, "head_down_r_threshold": head_down_r_threshold, "head_up_r_threshold": head_up_r_threshold},
             "exclude_unknown": True,
+            "roi_rule": {**pose_roi.RULE, "enabled": roi_enabled, "confidence": roi_confidence},
             "keypoint_confidence": KEYPOINT_CONFIDENCE, "coordinates": "original_image_xy_confidence"}
 
 
@@ -75,15 +78,28 @@ def draw_pil(image, detections: list[dict]) -> None:
                 draw.ellipse((x-2, y-2, x+2, y+2), fill="#ff4081")
         behavior = detection.get("behavior") or pose_behaviors.classify(points, image.width, image.height)
         x, y = detection["bbox"][:2]
-        label = {"举手": "HAND UP", "低头": "HEAD DOWN", "抬头": "HEAD UP"}.get(behavior["state"], "UNKNOWN")
+        label = behavior_label(behavior["state"])
         draw.text((x, max(0, y-12)), label, fill="#ff4081")
+        roi = behavior.get("roi", {})
+        polygon = roi.get("polygon", [])
+        if len(polygon) >= 3:
+            draw.line([tuple(p) for p in polygon]+[tuple(polygon[0])], fill="#ff9900", width=1)
+        for obj in roi.get("objects", []):
+            draw.rectangle(obj["bbox"], outline="#ffcc00", width=2)
+            draw.text(tuple(obj["bbox"][:2]), obj["class_name"], fill="#ffcc00")
 
 
-def draw_cv2(frame, poses: list[list[list[float]]], head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20) -> None:
+def behavior_label(state: str) -> str:
+    return {"举手": "HAND UP", "低头": "HEAD DOWN", "抬头": "HEAD UP",
+            "疑似看手机": "POSSIBLE PHONE", "疑似阅读": "POSSIBLE READING"}.get(state, "UNKNOWN")
+
+
+def draw_cv2(frame, poses: list[list[list[float]]], head_down_r_threshold: float = 0.05,
+             head_up_r_threshold: float = 0.20, behaviors: list[dict] | None = None) -> None:
     import cv2
 
     height, width = frame.shape[:2]
-    for points in poses:
+    for index, points in enumerate(poses):
         for a, b in SKELETON:
             if visible(points[a], width, height) and visible(points[b], width, height):
                 cv2.line(frame, (int(points[a][0]), int(points[a][1])),
@@ -91,8 +107,17 @@ def draw_cv2(frame, poses: list[list[list[float]]], head_down_r_threshold: float
         for point in points[:11]:
             if visible(point, width, height):
                 cv2.circle(frame, (int(point[0]), int(point[1])), 2, (129, 64, 255), -1)
-        behavior = pose_behaviors.classify(points, width, height, head_down_r_threshold, head_up_r_threshold)
-        label = {"举手": "HAND UP", "低头": "HEAD DOWN", "抬头": "HEAD UP"}.get(behavior["state"], "UNKNOWN")
+        behavior = behaviors[index] if behaviors is not None else pose_behaviors.classify(points, width, height, head_down_r_threshold, head_up_r_threshold)
+        label = behavior_label(behavior["state"])
         if len(points) > 5 and visible(points[5], width, height):
             cv2.putText(frame, label, (int(points[5][0]), max(12, int(points[5][1])-8)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (129, 64, 255), 1, cv2.LINE_AA)
+        roi = behavior.get("roi", {})
+        polygon = roi.get("polygon", [])
+        if len(polygon) >= 3:
+            import numpy as np
+
+            cv2.polylines(frame, [np.array(polygon, dtype=np.int32)], True, (0, 153, 255), 1)
+        for obj in roi.get("objects", []):
+            x1, y1, x2, y2 = (int(v) for v in obj["bbox"])
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 204, 255), 2)

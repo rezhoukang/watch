@@ -1,4 +1,4 @@
-import { el, esc } from './core.js?v=67';
+import { el, esc } from './core.js?v=69';
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 
@@ -339,6 +339,17 @@ function createPoseLayer(detections, pose, width, height) {
       if (a < 11 && b < 11 && valid(points[a]) && valid(points[b])) parts.push(`<line x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`);
     });
     points.slice(0, 11).filter(valid).forEach(([x, y]) => parts.push(`<circle cx="${x}" cy="${y}" r="2"/>`));
+    const roi = det.behavior?.roi;
+    const polygon = roi?.polygon;
+    if (Array.isArray(polygon) && polygon.length >= 3 && polygon.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite))) {
+      parts.push(`<polygon points="${polygon.map(p => p.join(',')).join(' ')}" fill="none" stroke="#ff9900" stroke-width="1"/>`);
+    }
+    (roi?.objects || []).forEach(obj => {
+      const box = obj.bbox;
+      if (!Array.isArray(box) || box.length !== 4 || !box.every(Number.isFinite)) return;
+      const [x1, y1, x2, y2] = box;
+      parts.push(`<rect x="${x1}" y="${y1}" width="${x2-x1}" height="${y2-y1}" fill="none" stroke="#ffcc00" stroke-width="2"/><text x="${x1}" y="${Math.max(10, y1-3)}" fill="#b06b00" font-size="12">${esc(obj.class_name)} ${esc(obj.confidence)}</text>`);
+    });
   });
   overlay.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="人体姿态骨架">${parts.join('')}</svg>`;
   return overlay;
@@ -450,6 +461,7 @@ function paintDetects(view) {
   const notes = [];
   if (merged > 0) notes.push(`去重合并 ${merged} 个`);
   if (shown.length + merged < view.dets.length) notes.push('部分被类别/置信度筛选隐藏');
+  if (view.dets.some(d => d.behavior?.roi?.status === 'unavailable')) notes.push('物体检测不可用，保留低头');
 
   const unit = view.shape === 'dot' ? '个点' : '个框';
   view.q('[data-role="count"]').textContent =
@@ -457,7 +469,7 @@ function paintDetects(view) {
       ? `人数（当前筛选）${shown.length} 人 / 模型检出 ${view.dets.length} 个人头`
       : `图上 ${shown.length} ${unit} / 共检出 ${view.dets.length} 个`) +
     (notes.length ? `（${notes.join('；')}）` : '') +
-    (view.dets.some(d => d.behavior) ? '｜' + (view.pose?.exclude_unknown ? ['举手', '低头', '抬头'] : ['举手', '低头', '抬头', '无法判断']).map(
+    (view.dets.some(d => d.behavior) ? '｜' + (view.pose?.exclude_unknown ? ['举手', '抬头', '低头', '疑似看手机', '疑似阅读'] : ['举手', '抬头', '低头', '疑似看手机', '疑似阅读', '无法判断']).map(
       state => `${state} ${shown.filter(i => view.dets[i].behavior?.state === state).length} 人`
     ).join(' · ') : '');
 }

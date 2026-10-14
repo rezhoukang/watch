@@ -219,10 +219,12 @@ def current_classes(weights: str) -> list[str] | None:
 
 
 def clear_model_cache() -> int:
+    import pose_roi
+
     with _lock:
         n = len(_model_cache)
         _model_cache.clear()
-        return n + rtdetrv4.clear_cache()
+        return n + rtdetrv4.clear_cache() + pose_roi.clear_cache()
 
 
 # ---------- 图片推理 ----------
@@ -240,6 +242,7 @@ def detect_image(
     imgsz: int = 640,
     save_result: bool = True,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
+    pose_roi: bool = True, roi_confidence: float = 0.6,
 ) -> dict:
     """推理单张图片，保存带框结果，返回推理详情
 
@@ -306,6 +309,20 @@ def detect_image(
         detection["keypoints"] = points
         detection["behavior"] = pose_behaviors.classify(points, int(orig_w), int(orig_h), head_down_r_threshold, head_up_r_threshold)
 
+    if poses:
+        import pose_roi as roi_module
+
+        roi_module.refine(r.orig_img, detections, pose_roi, roi_confidence, device_arg())
+        if save_result:
+            from PIL import Image, ImageDraw
+
+            image = Image.fromarray(cv2.cvtColor(r.orig_img, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(image)
+            for detection in detections:
+                draw.rectangle(detection["bbox"], outline="#00bb66", width=2)
+            pose_support.draw_pil(image, detections)
+            image.save(RESULTS_DIR / out_name)
+
     # 分类统计
     summary: dict[str, int] = {}
     for d in detections:
@@ -328,7 +345,7 @@ def detect_image(
         "summary": summary,
         "detections": detections,
         "mode": "pose" if getattr(r, "keypoints", None) is not None else "world" if is_world_weights(weights) else "yolo",
-        "pose": pose_support.metadata(head_down_r_threshold, head_up_r_threshold) if getattr(r, "keypoints", None) is not None else None,
+        "pose": pose_support.metadata(head_down_r_threshold, head_up_r_threshold, pose_roi, roi_confidence) if getattr(r, "keypoints", None) is not None else None,
         "excluded_unknown": excluded_unknown,
         "weight": Path(weights).name,
         "classes_used": classes_used,
@@ -361,7 +378,8 @@ def video_info(src: Path) -> dict | None:
 
 
 def _annotate_frame(
-    frame, r: Any, render: str = "box", line_width: int = 2, head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20
+    frame, r: Any, render: str = "box", line_width: int = 2, head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
+    pose_roi: bool = True, roi_confidence: float = 0.6
 ) -> Any:
     """按选定的显示形式把推理结果画到帧上，返回可写入视频的 BGR 图
 
@@ -376,6 +394,14 @@ def _annotate_frame(
     import pose_support
 
     r, _ = pose_support.filter_result(r, head_down_r_threshold, head_up_r_threshold)
+    import pose_behaviors
+    import pose_roi as roi_module
+
+    height, width = frame.shape[:2]
+    poses = pose_support.serialize_keypoints(r)
+    pose_detections = [{"keypoints": points, "behavior": pose_behaviors.classify(
+        points, width, height, head_down_r_threshold, head_up_r_threshold)} for points in poses]
+    roi_module.refine(frame, pose_detections, pose_roi, roi_confidence, device_arg())
 
     # 类别颜色与模型一致（按 class_id 取色）
     colors = Colors()
@@ -409,7 +435,8 @@ def _annotate_frame(
 
     import pose_support
 
-    pose_support.draw_cv2(frame, pose_support.serialize_keypoints(r), head_down_r_threshold, head_up_r_threshold)
+    pose_support.draw_cv2(frame, poses, head_down_r_threshold, head_up_r_threshold,
+                          [d["behavior"] for d in pose_detections])
     return frame
 
 
@@ -523,6 +550,7 @@ def start_video_job(
     merge_iou: float = 0.1,
     merge_confidence: float = 0.45,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
+    pose_roi: bool = True, roi_confidence: float = 0.6,
 ) -> str:
     """启动视频推理后台任务，返回 job_id
 
@@ -550,11 +578,11 @@ def start_video_job(
         "head_counts": [],   # 每帧 head 类检出数（折线图数据），形如 [(frame_idx, count)]
         "head_detection": head_detection,
         "rtdetr_base": head_detection and rtdetr_base,
-        "parameters": head_fusion_mod.parameters(rtdetr_base, merge_iou, merge_confidence) if head_detection else {"weights": weights, "confidence": conf, "head_down_r_threshold": head_down_r_threshold, "head_up_r_threshold": head_up_r_threshold},
+        "parameters": head_fusion_mod.parameters(rtdetr_base, merge_iou, merge_confidence) if head_detection else {"weights": weights, "confidence": conf, "head_down_r_threshold": head_down_r_threshold, "head_up_r_threshold": head_up_r_threshold, "pose_roi": pose_roi, "roi_confidence": roi_confidence},
     }
     threading.Thread(
         target=_run_video_job,
-        args=(job_id, src, weights, conf, stride, classes, start, end, render, line_width, head_detection, rtdetr_base, merge_iou, merge_confidence, head_down_r_threshold, head_up_r_threshold),
+        args=(job_id, src, weights, conf, stride, classes, start, end, render, line_width, head_detection, rtdetr_base, merge_iou, merge_confidence, head_down_r_threshold, head_up_r_threshold, pose_roi, roi_confidence),
         daemon=True,
     ).start()
     return job_id
@@ -576,6 +604,7 @@ def _run_video_job(
     merge_iou: float = 0.1,
     merge_confidence: float = 0.45,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
+    pose_roi: bool = True, roi_confidence: float = 0.6,
 ) -> None:
     job = JOBS[job_id]
     cap = None
@@ -616,7 +645,7 @@ def _run_video_job(
         # 点模式在文件名上标记，避免和框模式互相覆盖
         render_tag = (("_head_rtdetrbase" if rtdetr_base else "_head") if head_detection else "_rtdetrv4" if standalone_rtdetr else "") + ("" if render == "box" else "_dot")
         if not head_detection and getattr(model, "task", None) == "pose":
-            render_tag += f"_pose_down{head_down_r_threshold:g}_up{head_up_r_threshold:g}"
+            render_tag += f"_pose_down{head_down_r_threshold:g}_up{head_up_r_threshold:g}" + (f"_objectsmax{roi_confidence:g}" if pose_roi else "_noroi")
         if head_detection and merge_iou > 0:
             render_tag += f"_iou{merge_iou:g}"
             if merge_confidence > 0:
@@ -688,7 +717,7 @@ def _run_video_job(
                     n = len(r.boxes)
                     head_count = n if getattr(r, "keypoints", None) is not None else _count_class(r, "head")
                     last_annotated = _annotate_frame(
-                        frame.copy(), r, render=render, line_width=line_width, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold
+                        frame.copy(), r, render=render, line_width=line_width, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold, pose_roi=pose_roi, roi_confidence=roi_confidence
                     )
                 # 人数折线图数据：记录每帧 head 类检出数（stride 抽帧，中间帧不推理）
                 job["head_counts"].append([f0 + idx, head_count])
@@ -775,10 +804,11 @@ def prelabel_image(
     classes: list[str] | None = None,
     imgsz: int = 640,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
+    pose_roi: bool = True, roi_confidence: float = 0.6,
 ) -> list[dict]:
     """对单张图片做推理，返回可用作标注的框（原图像素 + 置信度）"""
     result = detect_image(
-        img_path, weights=weights, conf=conf, classes=classes, imgsz=imgsz, save_result=False, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold
+        img_path, weights=weights, conf=conf, classes=classes, imgsz=imgsz, save_result=False, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold, pose_roi=pose_roi, roi_confidence=roi_confidence
     )
     return result["detections"]
 

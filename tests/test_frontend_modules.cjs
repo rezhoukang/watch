@@ -150,6 +150,10 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     nodes.get(`${prefix}Weights`).value = 'yolov8m-pose.pt';
     nodes.get(`${prefix}Weights`).events.change();
     assert.equal(nodes.get(`${prefix}PoseOptions`).hidden, false);
+    nodes.get(`${prefix}PoseRoi`).checked = true;
+    nodes.get(`${prefix}RoiConfidence`).value = '0.7';
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).poseRoi, true);
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).roiConfidence, .7);
     for (const [direction, value] of [['Down', '0.1'], ['Up', '0.4']]) {
       nodes.get(`${prefix}Head${direction}RSlider`).value = value;
       nodes.get(`${prefix}Head${direction}RSlider`).events.input();
@@ -171,14 +175,18 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   keypoints[11] = [80, 70, 0.9];
   modules.get(path.join(root, 'js/viewer.js')).namespace.renderDetectResult({
     mode: 'pose', pose: { skeleton: [[5, 7], [7, 9]], keypoint_confidence: 0.5 },
-    detections: [{ class_name: 'person', confidence: 0.9, bbox: [10, 10, 90, 70], keypoints, behavior: { state: '抬头' } }],
+    detections: [{ class_name: 'person', confidence: 0.9, bbox: [10, 10, 90, 70], keypoints,
+      behavior: { state: '疑似阅读', roi: { polygon: [[20, 30], [60, 30], [40, 60]],
+        objects: [{ class_name: 'book', confidence: .8, bbox: [30, 40, 45, 50] }] } } }],
   }, 'pose.png', 0.38, 0, 640);
   const poseLayer = viewer.querySelector('[data-role="boxes"]').children.find((node) => node.className === 'pose-layer');
   assert(poseLayer.innerHTML.includes('<line x1="20" y1="30" x2="40" y2="50"/>'));
   assert(!poseLayer.innerHTML.includes('cx="70"'));
   assert(!poseLayer.innerHTML.includes('cx="80"'));
-  assert(viewer.querySelector('[data-role="count"]').textContent.includes('抬头 1 人'));
-  assert(viewer.querySelector('[data-role="tablebody"]').children.some(row => row.innerHTML.includes('抬头')));
+  assert(poseLayer.innerHTML.includes('<polygon points="20,30 60,30 40,60"'));
+  assert(poseLayer.innerHTML.includes('<rect x="30" y="40" width="15" height="10"'));
+  assert(viewer.querySelector('[data-role="count"]').textContent.includes('疑似阅读 1 人'));
+  assert(viewer.querySelector('[data-role="tablebody"]').children.some(row => row.innerHTML.includes('疑似阅读')));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
   assert.equal(nodes.has('globalBanner'), false);

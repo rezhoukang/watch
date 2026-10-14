@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=67';
+import { el, api } from './core.js?v=69';
 
 /* ==================== 环境状态 ==================== */
 
@@ -109,11 +109,14 @@ function readDetectOptions(prefix) {
   const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || '0.45') : 0;
   const headDownRThreshold = Number(el(`${prefix}HeadDownR`).value || '0.05');
   const headUpRThreshold = Number(el(`${prefix}HeadUpR`).value || '0.20');
+  const poseRoi = !!el(`${prefix}PoseRoi`).checked;
+  const roiConfidence = Number(el(`${prefix}RoiConfidence`).value || '0.6');
+  if (!Number.isFinite(roiConfidence) || roiConfidence < 0 || roiConfidence > 1) throw new Error('物体置信度必须在 0 到 1 之间');
   if ([headDownRThreshold, headUpRThreshold].some(v => !Number.isFinite(v) || v < -1 || v > 1)) throw new Error('低头和抬头 R 阈值必须在 -1 到 1 之间');
   if (headDownRThreshold >= headUpRThreshold) throw new Error('低头 R 阈值必须小于抬头 R 阈值');
   if (!Number.isFinite(mergeIou) || mergeIou < 0 || mergeIou > 1) throw new Error('合并 IoU 阈值必须在 0 到 1 之间');
   if (!Number.isFinite(mergeConfidence) || mergeConfidence < 0 || mergeConfidence > 1) throw new Error('自定义 IoU 的置信度门槛必须在 0 到 1 之间');
-  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
+  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
 }
 
 const previousHeadOptions = new Map();

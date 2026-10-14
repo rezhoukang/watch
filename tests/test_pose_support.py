@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import app
 import inference_history
 import pose_support
+import pose_roi
 import vision
 from ultralytics.engine.results import Results
 from web import common
@@ -28,6 +29,36 @@ def prediction():
 
 
 class PoseTests(unittest.TestCase):
+    def test_roi_phone_state_and_evidence_survive_image_archive_and_video_render(self):
+        person = prediction()
+        assert person.keypoints is not None
+        for index, point in ((7, [20, 60, .9]), (8, [90, 60, .9]), (9, [40, 80, .9]), (10, [70, 80, .9])):
+            person.keypoints.data[0, index] = torch.tensor(point)
+        object_result = Results(np.full((100, 200, 3), 255, dtype=np.uint8), path='full.png', names={0: 'cell phone'},
+                                boxes=torch.tensor([[45, 65, 55, 75, .9, 0]]))
+        roi_model = Mock()
+        roi_model.predict.return_value = [object_result]
+        model = Mock()
+        model.predict.return_value = [person]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Image.new('RGB', (200, 100), 'white').save(root / 'pose.png')
+            with patch.object(common, 'UPLOAD_DIR', root), patch.object(common, '_require_image_backend'), \
+                 patch.object(vision, 'get_model', return_value=model), \
+                 patch.object(inference_history, 'HISTORY_DIR', root / 'history'), \
+                 patch.object(pose_roi, '_get_model', return_value=roi_model):
+                client = TestClient(app.app)
+                response = client.post('/api/detect/image/pose.png?weights=yolov8m-pose.pt&head_down_r_threshold=.3&head_up_r_threshold=.4')
+                self.assertEqual(response.status_code, 200, response.text)
+                record = response.json()
+                self.assertEqual(record['detections'][0]['behavior']['state'], '疑似看手机')
+                self.assertEqual(record['detections'][0]['behavior']['roi']['objects'][0]['bbox'], [45, 65, 55, 75])
+                saved = client.get(record['record_url']).json()
+                self.assertEqual(saved['detections'], record['detections'])
+                with patch.object(pose_support, 'draw_cv2') as draw:
+                    vision._annotate_frame(person.orig_img.copy(), person, head_down_r_threshold=.3, head_up_r_threshold=.4)
+                    self.assertEqual(draw.call_args.args[4][0]['state'], '疑似看手机')
+
     def test_image_api_preserves_keypoints_and_archives_visible_skeleton(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

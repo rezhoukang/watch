@@ -1,9 +1,9 @@
-import { el, esc, api, banner, showError } from './core.js?v=67';
-import { readDetectOptions } from './models.js?v=67';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=67';
-import { switchSubPane } from './navigation.js?v=67';
-import { renderDetectResult } from './viewer.js?v=67';
-import { importBehaviorRecords } from './annotator.js?v=67';
+import { el, esc, api, banner, showError } from './core.js?v=69';
+import { readDetectOptions } from './models.js?v=69';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=69';
+import { switchSubPane } from './navigation.js?v=69';
+import { renderDetectResult } from './viewer.js?v=69';
+import { importBehaviorRecords } from './annotator.js?v=69';
 
 /* ==================== 图片推理 ==================== */
 
@@ -130,7 +130,7 @@ async function detectImage(filename) {
     const headDetection = !!el('detHeadDetection').checked;
     const conf = headDetection ? '0.45' : el('detConf').value || '0.38';
     const imgsz = headDetection ? '640' : el('detImgsz').value || '640';
-    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, headDownRThreshold, headUpRThreshold, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
+    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
     const modeText = headDetection ? `目标检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';
@@ -155,7 +155,7 @@ async function detectImage(filename) {
       `/api/detect/image/${encodeURIComponent(filename)}` +
       `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}` +
       `&imgsz=${encodeURIComponent(imgsz)}` +
-      (isPose ? `&head_down_r_threshold=${encodeURIComponent(headDownRThreshold)}&head_up_r_threshold=${encodeURIComponent(headUpRThreshold)}` : '') +
+      (isPose ? `&head_down_r_threshold=${encodeURIComponent(headDownRThreshold)}&head_up_r_threshold=${encodeURIComponent(headUpRThreshold)}&pose_roi=${poseRoi}&roi_confidence=${encodeURIComponent(roiConfidence)}` : '') +
       (headDetection ? `&head_detection=true&merge_iou=${encodeURIComponent(mergeIou)}&merge_confidence=${encodeURIComponent(mergeConfidence)}` : '') +
       (rtdetrBase ? '&rtdetr_base=true' : '') +
       (classes ? `&classes=${encodeURIComponent(classes)}` : '');

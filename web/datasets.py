@@ -95,6 +95,8 @@ def prelabel_image(
     merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
     head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
     head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
+    pose_roi: bool = True,
+    roi_confidence: float = Query(default=0.6, ge=0, le=1),
 ) -> dict:
     """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。
@@ -122,7 +124,7 @@ def prelabel_image(
     try:
         fused = head_fusion.detect_image(img_path, rtdetr_base=rtdetr_base, merge_iou=merge_iou, merge_confidence=merge_confidence) if head_detection else None
         dets = fused["detections"] if fused is not None else vision.prelabel_image(
-            img_path, weights=weights, conf=conf, classes=class_list, imgsz=imgsz, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold
+            img_path, weights=weights, conf=conf, classes=class_list, imgsz=imgsz, head_down_r_threshold=head_down_r_threshold, head_up_r_threshold=head_up_r_threshold, pose_roi=pose_roi, roi_confidence=roi_confidence
         )
     except Exception as e:  # noqa: BLE001
         common.logger.exception("预标注失败：%s", filename)

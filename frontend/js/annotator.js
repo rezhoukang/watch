@@ -1,7 +1,7 @@
-import { el, esc, api, banner, showError } from './core.js?v=67';
-import { readDetectOptions } from './models.js?v=67';
-import { classColor, classColorA, createPoseLayer } from './viewer.js?v=67';
-import { loadDatasets } from './training.js?v=67';
+import { el, esc, api, banner, showError } from './core.js?v=69';
+import { readDetectOptions } from './models.js?v=69';
+import { classColor, classColorA, createPoseLayer } from './viewer.js?v=69';
+import { loadDatasets } from './training.js?v=69';
 
 /* ==================== 标注（全屏标注器）====================
  * 入口：训练页「标注数据」区选数据集 + Train/Val → 点缩略图进入全屏标注器。
@@ -547,7 +547,7 @@ el('annPrelabel').addEventListener('click', async () => {
   btn.disabled = true;
   annMsg('预标注中…（首次要加载模型，可能较慢）');
   try {
-    const { weights, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, isPose } = readDetectOptions('ann');
+    const { weights, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, isPose } = readDetectOptions('ann');
     const q = new URLSearchParams({
       conf: el('annConf').value || '0.38',
       weights,
@@ -555,7 +555,7 @@ el('annPrelabel').addEventListener('click', async () => {
     });
     if (classes) q.set('classes', classes);
     if (headDetection) q.set('head_detection', 'true');
-    if (isPose) { q.set('head_down_r_threshold', String(headDownRThreshold)); q.set('head_up_r_threshold', String(headUpRThreshold)); }
+    if (isPose) { q.set('head_down_r_threshold', String(headDownRThreshold)); q.set('head_up_r_threshold', String(headUpRThreshold)); q.set('pose_roi', String(poseRoi)); q.set('roi_confidence', String(roiConfidence)); }
     if (headDetection) q.set('merge_iou', String(mergeIou));
     if (headDetection) q.set('merge_confidence', String(mergeConfidence));
     if (rtdetrBase) q.set('rtdetr_base', 'true');

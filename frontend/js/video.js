@@ -1,8 +1,8 @@
-import { el, esc, api, banner, showError } from './core.js?v=67';
-import { readDetectOptions } from './models.js?v=67';
-import { pollJob } from './jobs.js?v=67';
-import { showHeadChart } from './charts.js?v=67';
-import { loadOutputs } from './outputs.js?v=67';
+import { el, esc, api, banner, showError } from './core.js?v=69';
+import { readDetectOptions } from './models.js?v=69';
+import { pollJob } from './jobs.js?v=69';
+import { showHeadChart } from './charts.js?v=69';
+import { loadOutputs } from './outputs.js?v=69';
 
 /* ==================== 视频推理 ==================== */
 
@@ -177,7 +177,7 @@ async function detectVideo(filename, btn) {
     const stride = el('vidStride').value || '1';
     const render = el('vidRender').value || 'box';
     const { start, end } = readVideoRange(item);
-    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold } = readDetectOptions('vid');
+    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence } = readDetectOptions('vid');
     const rangeText = end == null ? `全片` : `${fmtDuration(start)} ~ ${fmtDuration(end)}`;
     const renderText = render === 'dot' ? '中心点' : '框';
     const modeText = headDetection ? `目标检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜640｜IoU ≤ ${mergeIou} 补齐` : isWorld
@@ -198,7 +198,7 @@ async function detectVideo(filename, btn) {
       render,
     });
     if (end != null) q.set('end', String(end));
-    if (isPose) { q.set('head_down_r_threshold', String(headDownRThreshold)); q.set('head_up_r_threshold', String(headUpRThreshold)); }
+    if (isPose) { q.set('head_down_r_threshold', String(headDownRThreshold)); q.set('head_up_r_threshold', String(headUpRThreshold)); q.set('pose_roi', String(poseRoi)); q.set('roi_confidence', String(roiConfidence)); }
     if (headDetection) q.set('head_detection', 'true');
     if (headDetection) q.set('merge_iou', String(mergeIou));
     if (headDetection) q.set('merge_confidence', String(mergeConfidence));
