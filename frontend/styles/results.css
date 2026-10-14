@@ -164,6 +164,10 @@
   border-radius: 8px;
 }
 .viewer .boxes { position: absolute; inset: 0; }
+.pose-layer { position: absolute; inset: 0; pointer-events: none; }
+.pose-layer svg { width: 100%; height: 100%; display: block; }
+.pose-layer line { stroke: #00bcd4; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.pose-layer circle { fill: #ff4081; }
 .history-merge { margin-bottom: 16px; }
 .merge-heading, .merge-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .merge-heading { justify-content: space-between; }

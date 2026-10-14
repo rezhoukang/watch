@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import rtdetrv4
+from project_paths import MODELS_DIR
 
 
 def setup() -> None:
@@ -29,7 +30,7 @@ def setup() -> None:
         raise RuntimeError(f"源码版本为 {revision}，需要 {rtdetrv4.REPO_REVISION}；请设置 RTDETRV4_REPO 指向空目录重新安装")
     print(f"Official source: {repo} @ {revision}")
 
-    weight = rtdetrv4.BASE_DIR / "models" / rtdetrv4.WEIGHTS_NAME
+    weight = MODELS_DIR / rtdetrv4.WEIGHTS_NAME
     weight.parent.mkdir(parents=True, exist_ok=True)
     if weight.exists():
         with weight.open("rb") as stream:

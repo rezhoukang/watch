@@ -11,6 +11,7 @@ import os
 import sys
 import threading
 from pathlib import Path
+from project_paths import MODELS_DIR
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -38,8 +39,8 @@ def repo_dir() -> Path:
 def status() -> dict:
     """Report installation readiness without loading a model or downloading files."""
     missing = []
-    if not (BASE_DIR / "models" / WEIGHTS_NAME).is_file():
-        missing.append(f"缺少 models/{WEIGHTS_NAME}")
+    if not (MODELS_DIR / WEIGHTS_NAME).is_file():
+        missing.append(f"缺少 weight/{WEIGHTS_NAME}")
     if not (repo_dir() / "engine" / "core" / "yaml_config.py").is_file():
         missing.append("缺少官方源码，请运行 python scripts/setup_rtdetrv4.py")
     packages = {
@@ -86,7 +87,7 @@ class _HeadDetector:
             HGNetv2={"pretrained": False},
             HybridEncoder={"distill_teacher_dim": 1152},
         )
-        state = load_file(str(BASE_DIR / "models" / WEIGHTS_NAME), device="cpu")
+        state = load_file(str(MODELS_DIR / WEIGHTS_NAME), device="cpu")
         model = cfg.model
         # Strict validation catches a wrong architecture/checkpoint immediately.
         model.load_state_dict(state, strict=True)

@@ -20,6 +20,8 @@ class Element {
   }
   querySelectorAll() { return []; }
   removeAttribute() {}
+  set innerHTML(value) { this.html = value; this.children = []; }
+  get innerHTML() { return this.html || ''; }
   scrollIntoView() {}
   getBoundingClientRect() { return { left: 0 }; }
   setAttribute() {}
@@ -63,7 +65,15 @@ function getModule(filename) {
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 (async () => {
   const entry = getModule(path.join(root, 'app.js'));
-  await entry.link((specifier, parent) => getModule(path.resolve(path.dirname(parent.identifier), specifier)));
+  const assetVersion = html.match(/app\.js\?v=(\d+)/)[1];
+  await entry.link((specifier, parent) => {
+    assert(specifier.endsWith(`?v=${assetVersion}`), `Module has stale asset version: ${specifier}`);
+    return getModule(path.resolve(path.dirname(parent.identifier), specifier.split('?')[0]));
+  });
+  const styleVersion = html.match(/style\.css\?v=(\d+)/)[1];
+  for (const match of fs.readFileSync(path.join(root, 'style.css'), 'utf8').matchAll(/@import url\('([^']+)'\)/g)) {
+    assert(match[1].endsWith(`?v=${styleVersion}`), `Stylesheet has stale asset version: ${match[1]}`);
+  }
   await entry.evaluate(); await flush();
   assert.equal(modules.size, 14);
   assert(calls.includes('/api/yolo/status'));
@@ -135,6 +145,17 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(viewer.querySelector('[data-role="viewer"]').events.mouseenter, undefined);
   viewer.querySelector('[data-role="delete-record"]').events.click();
   assert.equal(deleted, 'example');
+  const keypoints = Array.from({ length: 17 }, () => [0, 0, 0]);
+  keypoints[5] = [20, 30, 0.9]; keypoints[7] = [40, 50, 0.8]; keypoints[9] = [70, 60, 0.2];
+  modules.get(path.join(root, 'js/viewer.js')).namespace.renderDetectResult({
+    mode: 'pose', pose: { skeleton: [[5, 7], [7, 9]], keypoint_confidence: 0.5 },
+    detections: [{ class_name: 'person', confidence: 0.9, bbox: [10, 10, 90, 70], keypoints }],
+  }, 'pose.png', 0.38, 0, 640);
+  const poseLayer = viewer.querySelector('[data-role="boxes"]').children.find((node) => node.className === 'pose-layer');
+  assert(poseLayer.innerHTML.includes('<line x1="20" y1="30" x2="40" y2="50"/>'));
+  assert(!poseLayer.innerHTML.includes('cx="70"'));
+  viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
+  assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
   assert.equal(nodes.has('globalBanner'), false);
   console.log('ES module startup, navigation and result viewer checks passed (14 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

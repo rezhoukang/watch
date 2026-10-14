@@ -1,5 +1,5 @@
 /* Ordered to preserve the original cascade. */
-@import url('./styles/base.css');
-@import url('./styles/results.css');
-@import url('./styles/controls.css');
-@import url('./styles/annotator.css');
+@import url('./styles/base.css?v=39');
+@import url('./styles/results.css?v=39');
+@import url('./styles/controls.css?v=39');
+@import url('./styles/annotator.css?v=39');

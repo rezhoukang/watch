@@ -83,8 +83,8 @@ def prelabel_image(
     imgsz: int = 640,
     head_detection: bool = False,
     rtdetr_base: bool = False,
-    merge_iou: float = Query(default=0.0, ge=0, le=1),
-    merge_confidence: float = Query(default=0.0, ge=0, le=1),
+    merge_iou: float = Query(default=head_fusion.DEFAULT_MERGE_IOU, ge=0, le=1),
+    merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
 ) -> dict:
     """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。

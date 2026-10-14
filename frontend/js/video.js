@@ -1,8 +1,8 @@
-import { el, esc, api, banner, showError } from './core.js';
-import { readDetectOptions } from './models.js';
-import { pollJob } from './jobs.js';
-import { showHeadChart } from './charts.js';
-import { loadOutputs } from './outputs.js';
+import { el, esc, api, banner, showError } from './core.js?v=61';
+import { readDetectOptions } from './models.js?v=61';
+import { pollJob } from './jobs.js?v=61';
+import { showHeadChart } from './charts.js?v=61';
+import { loadOutputs } from './outputs.js?v=61';
 
 /* ==================== 视频推理 ==================== */
 
@@ -177,12 +177,12 @@ async function detectVideo(filename, btn) {
     const stride = el('vidStride').value || '1';
     const render = el('vidRender').value || 'box';
     const { start, end } = readVideoRange(item);
-    const { weights, isWorld, classes, isRtdetr, rtdetrBase, mergeIou, mergeConfidence } = readDetectOptions('vid');
+    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou, mergeConfidence } = readDetectOptions('vid');
     const rangeText = end == null ? `全片` : `${fmtDuration(start)} ~ ${fmtDuration(end)}`;
     const renderText = render === 'dot' ? '中心点' : '框';
     const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜640｜IoU ≤ ${mergeIou} 补齐` : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
-      : isRtdetr ? 'RT-DETRv4 人头检测｜640' : '普通 YOLO';
+      : isRtdetr ? 'RT-DETRv4 人头检测｜640' : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';
 
     btn.disabled = true;
     box.innerHTML =

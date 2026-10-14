@@ -3,7 +3,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "frontend"
-MODELS_DIR = BASE_DIR / "models"
+MODELS_DIR = BASE_DIR / "weight"
 UPLOAD_DIR = BASE_DIR / "data" / "uploads"
 RESULTS_DIR = BASE_DIR / "data" / "results"
 VIDEO_DIR = BASE_DIR / "data" / "videos"

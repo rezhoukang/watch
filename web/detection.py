@@ -20,8 +20,8 @@ def detect_image(
     imgsz: int = 640,
     head_detection: bool = False,
     rtdetr_base: bool = False,
-    merge_iou: float = Query(default=0.0, ge=0, le=1),
-    merge_confidence: float = Query(default=0.0, ge=0, le=1),
+    merge_iou: float = Query(default=head_fusion.DEFAULT_MERGE_IOU, ge=0, le=1),
+    merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
 ) -> dict:
     if head_detection:
         common._require_head_detection()
@@ -85,8 +85,8 @@ def detect_video(
     line_width: int = 2,
     head_detection: bool = False,
     rtdetr_base: bool = False,
-    merge_iou: float = Query(default=0.0, ge=0, le=1),
-    merge_confidence: float = Query(default=0.0, ge=0, le=1),
+    merge_iou: float = Query(default=head_fusion.DEFAULT_MERGE_IOU, ge=0, le=1),
+    merge_confidence: float = Query(default=head_fusion.DEFAULT_MERGE_CONFIDENCE, ge=0, le=1),
 ) -> dict:
     if head_detection:
         common._require_head_detection()

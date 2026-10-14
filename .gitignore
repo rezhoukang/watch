@@ -29,6 +29,7 @@ venv/
 
 # 模型权重
 /models/
+/weight/
 *.pt
 /third_party/
 

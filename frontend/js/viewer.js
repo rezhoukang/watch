@@ -1,4 +1,4 @@
-import { el, esc } from './core.js';
+import { el, esc } from './core.js?v=61';
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 
@@ -52,6 +52,8 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
     naturalH: 1,
     merge: r.merge || null,
     fusion: r.fusion || null,
+    pose: r.pose || null,
+    showSkeleton: true,
     // 去重（后处理，不重跑模型）
     dedup: DEDUP_DEFAULT,
     dedupDist: 20,              // 中心点距离 ≤ 这个像素数 → 视为同一目标
@@ -68,7 +70,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   const baseConf = r.parameters?.base?.confidence ?? (rtdetrBase ? 0.2 : 0.45);
   const incomingConf = r.parameters?.incoming?.confidence ?? (rtdetrBase ? 0.45 : 0.2);
   const rtConf = rtdetrBase ? baseConf : incomingConf;
-  const modeLabel = r.fusion ? `head检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
+  const modeLabel = r.fusion ? `head检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : r.pose ? 'YOLO Pose 人体骨架' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
   const clsNote =
     r.mode === 'world'
       ? `prompt「${(r.classes_used || []).join(', ') || '权重内置'}」`
@@ -87,6 +89,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
       `<label>置信度 ≥ <input type="range" data-role="minconf" min="0.01" max="0.99" step="0.01" value="${esc(confUsed)}">` +
       `<b data-role="minconf-val">${esc(confUsed)}</b></label>` +
       `<label><input type="checkbox" data-role="alwaystag"> 常显标签</label>` +
+      (view.pose ? `<label><input type="checkbox" data-role="skeleton" checked> 骨架（关键点 ≥ ${esc(view.pose.keypoint_confidence)}）</label>` : '') +
       `<div class="chips" data-role="chips"></div>` +
     `</div>` +
     `<div class="dedup-bar">` +
@@ -183,6 +186,10 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   });
   view.q('[data-role="alwaystag"]').addEventListener('change', (e) => {
     view.q('[data-role="viewer"]').classList.toggle('always-tags', e.target.checked);
+  });
+  if (view.pose) view.q('[data-role="skeleton"]').addEventListener('change', (e) => {
+    view.showSkeleton = e.target.checked;
+    paintDetects(view);
   });
 
   // 去重：纯前端后处理，参数随时可调
@@ -401,6 +408,23 @@ function paintDetects(view) {
       wrap.appendChild(node);
     }
   });
+
+  if (view.pose && view.showSkeleton) {
+    const overlay = document.createElement('div');
+    overlay.className = 'pose-layer';
+    const parts = [];
+    const valid = (p) => Array.isArray(p) && p.length >= 3 && p.every(Number.isFinite) &&
+      p[2] >= view.pose.keypoint_confidence && p[0] > 0 && p[0] < view.naturalW && p[1] > 0 && p[1] < view.naturalH;
+    shown.forEach((i) => {
+      const points = view.dets[i].keypoints || [];
+      (view.pose.skeleton || []).forEach(([a, b]) => {
+        if (valid(points[a]) && valid(points[b])) parts.push(`<line x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`);
+      });
+      points.filter(valid).forEach(([x, y]) => parts.push(`<circle cx="${x}" cy="${y}" r="2"/>`));
+    });
+    overlay.innerHTML = `<svg viewBox="0 0 ${view.naturalW} ${view.naturalH}" preserveAspectRatio="none" aria-label="人体姿态骨架">${parts.join('')}</svg>`;
+    wrap.appendChild(overlay);
+  }
 
   const visible = new Set(shown);
   view.q('[data-role="tablebody"]').querySelectorAll('tr').forEach((tr) => {

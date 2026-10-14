@@ -1,8 +1,8 @@
-import { el, esc, api, banner, showError } from './core.js';
-import { readDetectOptions } from './models.js';
-import { bindImageHover, hideHoverPreview } from './preview.js';
-import { switchSubPane } from './navigation.js';
-import { renderDetectResult } from './viewer.js';
+import { el, esc, api, banner, showError } from './core.js?v=61';
+import { readDetectOptions } from './models.js?v=61';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=61';
+import { switchSubPane } from './navigation.js?v=61';
+import { renderDetectResult } from './viewer.js?v=61';
 
 /* ==================== 图片推理 ==================== */
 
@@ -128,10 +128,10 @@ async function detectImage(filename) {
     const headDetection = !!el('detHeadDetection').checked;
     const conf = headDetection ? '0.45' : el('detConf').value || '0.38';
     const imgsz = headDetection ? '640' : el('detImgsz').value || '640';
-    const { weights, isWorld, classes, isRtdetr, rtdetrBase, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
+    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
     const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
-      : '普通 YOLO';
+      : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';
 
     // 切到「推理结果」子页面，并显示当前图片名
     switchSubPane('result');

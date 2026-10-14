@@ -40,8 +40,8 @@ class HeadFusionTests(unittest.TestCase):
         heads = {"detections": [detection([5, 0, 15, 10], class_id=1)]}
         for reverse in (False, True):
             with self.subTest(reverse=reverse):
-                strict = head_fusion.fuse_results(yolo, heads, reverse, merge_iou=0.3)
-                boundary = head_fusion.fuse_results(yolo, heads, reverse, merge_iou=1/3)
+                strict = head_fusion.fuse_results(yolo, heads, reverse, merge_iou=0.3, merge_confidence=0)
+                boundary = head_fusion.fuse_results(yolo, heads, reverse, merge_iou=1/3, merge_confidence=0)
                 self.assertEqual(strict["count"], 1)
                 self.assertEqual(boundary["count"], 2)
                 self.assertEqual(boundary["fusion"]["merge_iou"], 1/3)

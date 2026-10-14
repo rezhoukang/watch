@@ -10,9 +10,11 @@ BASE_WEIGHTS = "medium.pt"
 BASE_CONFIDENCE = 0.45
 HEAD_CONFIDENCE = 0.25
 IMAGE_SIZE = 640
+DEFAULT_MERGE_IOU = 0.1
+DEFAULT_MERGE_CONFIDENCE = 0.45
 
 
-def parameters(rtdetr_base: bool = False, merge_iou: float = 0.0, merge_confidence: float = 0.0) -> dict:
+def parameters(rtdetr_base: bool = False, merge_iou: float = DEFAULT_MERGE_IOU, merge_confidence: float = DEFAULT_MERGE_CONFIDENCE) -> dict:
     config = {
         "head_detection": True, "imgsz": IMAGE_SIZE,
         "rtdetr_base": rtdetr_base,
@@ -26,7 +28,7 @@ def parameters(rtdetr_base: bool = False, merge_iou: float = 0.0, merge_confiden
     return config
 
 
-def detect_image(src: Path, rtdetr_base: bool = False, merge_iou: float = 0.0, merge_confidence: float = 0.0) -> dict:
+def detect_image(src: Path, rtdetr_base: bool = False, merge_iou: float = DEFAULT_MERGE_IOU, merge_confidence: float = DEFAULT_MERGE_CONFIDENCE) -> dict:
     base = vision.detect_image(src, weights=BASE_WEIGHTS, conf=BASE_CONFIDENCE,
                                imgsz=IMAGE_SIZE, save_result=False)
     incoming = vision.detect_image(src, weights=rtdetrv4.WEIGHTS_NAME, conf=HEAD_CONFIDENCE,
@@ -34,7 +36,7 @@ def detect_image(src: Path, rtdetr_base: bool = False, merge_iou: float = 0.0, m
     return fuse_results(base, incoming, rtdetr_base, merge_iou, merge_confidence)
 
 
-def fuse_results(base: dict, incoming: dict, rtdetr_base: bool = False, merge_iou: float = 0.0, merge_confidence: float = 0.0) -> dict:
+def fuse_results(base: dict, incoming: dict, rtdetr_base: bool = False, merge_iou: float = DEFAULT_MERGE_IOU, merge_confidence: float = DEFAULT_MERGE_CONFIDENCE) -> dict:
     base_dets, incoming_dets = copy.deepcopy(base["detections"]), copy.deepcopy(incoming["detections"])
     for det in base_dets:
         det["source_model"] = BASE_WEIGHTS
@@ -70,7 +72,7 @@ def fuse_results(base: dict, incoming: dict, rtdetr_base: bool = False, merge_io
     return result
 
 
-def detect_frame(frame, model=None, rtdetr_base: bool = False, merge_iou: float = 0.0, merge_confidence: float = 0.0) -> dict:
+def detect_frame(frame, model=None, rtdetr_base: bool = False, merge_iou: float = DEFAULT_MERGE_IOU, merge_confidence: float = DEFAULT_MERGE_CONFIDENCE) -> dict:
     """Fuse both models on the exact same BGR frame without temporary image files."""
     from PIL import Image
     model = model if model is not None else vision.get_model(BASE_WEIGHTS)

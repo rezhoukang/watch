@@ -93,14 +93,14 @@ _unified_weights_dir = False
 
 
 def _unify_weights_dir() -> None:
-    """把 ultralytics 的自动下载目录从默认的 weights/ 改到 models/。
+    """把 ultralytics 的自动下载目录从默认的 weights/ 改到 weight/。
 
     不改的话项目里会出现两个权重目录：
-      - models/            本项目的业务权重目录（后端只扫这里生成下拉框）
+      - weight/            本项目的业务权重目录（后端只扫这里生成下拉框）
       - weights/           ultralytics 默认目录，CLIP 文本编码器（337MB）会下到这里
     注意 ultralytics.nn.text_model 是 import 时绑定 WEIGHTS_DIR 的，
     必须连它一起改，否则 CLIP 会在新位置重新下载一遍。
-    CLIP 落在 models/clip/ 子目录，而模型清单只扫 models/*.pt（不递归），不会互相污染。
+    CLIP 落在 weight/clip/ 子目录，而模型清单只扫 weight/*.pt（不递归），不会互相污染。
     """
     global _unified_weights_dir
     if _unified_weights_dir:
@@ -168,7 +168,7 @@ def world_ready(weights: str) -> tuple[bool, str]:
 
 
 def get_model(weights: str = DEFAULT_WEIGHTS, classes: list[str] | None = None) -> Any:
-    """加载并缓存模型（权重不存在会自动下载到 models/ 目录）
+    """加载并缓存模型（权重不存在会自动下载到 weight/ 目录）
 
     - 文件名含 world → 走 YOLO-World（开放词表），可用 classes 传任意类别文字
     - 其它权重 → 走普通 YOLO（类别固定为权重内置类别，classes 被忽略）
@@ -182,7 +182,7 @@ def get_model(weights: str = DEFAULT_WEIGHTS, classes: list[str] | None = None) 
     _unify_weights_dir()
     with _lock:
         if weights not in _model_cache:
-            # 只认文件名，防止路径穿越；下载缓存放 models/
+            # 只认文件名，防止路径穿越；下载缓存放 weight/
             name = Path(weights).name
             local = MODELS_DIR / name
             # 始终传绝对路径：ultralytics 拼下载 URL 时只取文件名，
@@ -293,6 +293,12 @@ def detect_image(
             }
         )
 
+    import pose_support
+
+    poses = pose_support.serialize_keypoints(r)
+    for detection, points in zip(detections, poses):
+        detection["keypoints"] = points
+
     # 分类统计
     summary: dict[str, int] = {}
     for d in detections:
@@ -314,7 +320,8 @@ def detect_image(
         "count": len(detections),
         "summary": summary,
         "detections": detections,
-        "mode": "world" if is_world_weights(weights) else "yolo",
+        "mode": "pose" if getattr(r, "keypoints", None) is not None else "world" if is_world_weights(weights) else "yolo",
+        "pose": pose_support.metadata() if getattr(r, "keypoints", None) is not None else None,
         "weight": Path(weights).name,
         "classes_used": classes_used,
     }
@@ -389,6 +396,9 @@ def _annotate_frame(
         else:
             annotator.box_label((x1, y1, x2, y2), label, color=color)
 
+    import pose_support
+
+    pose_support.draw_cv2(frame, pose_support.serialize_keypoints(r))
     return frame
 
 
@@ -499,8 +509,8 @@ def start_video_job(
     line_width: int = 2,
     head_detection: bool = False,
     rtdetr_base: bool = False,
-    merge_iou: float = 0.0,
-    merge_confidence: float = 0.0,
+    merge_iou: float = 0.1,
+    merge_confidence: float = 0.45,
 ) -> str:
     """启动视频推理后台任务，返回 job_id
 
@@ -551,8 +561,8 @@ def _run_video_job(
     line_width: int = 2,
     head_detection: bool = False,
     rtdetr_base: bool = False,
-    merge_iou: float = 0.0,
-    merge_confidence: float = 0.0,
+    merge_iou: float = 0.1,
+    merge_confidence: float = 0.45,
 ) -> None:
     job = JOBS[job_id]
     cap = None
@@ -657,7 +667,8 @@ def _run_video_job(
                 else:
                     assert model is not None
                     r = model.predict(source=frame, conf=conf, device=dev, verbose=False)[0]
-                    n, head_count = len(r.boxes), _count_class(r, "head")
+                    n = len(r.boxes)
+                    head_count = n if getattr(r, "keypoints", None) is not None else _count_class(r, "head")
                     last_annotated = _annotate_frame(
                         frame.copy(), r, render=render, line_width=line_width
                     )
@@ -843,7 +854,7 @@ def _run_train_job(
 
 
 def _resolve_weights(weights: str) -> str:
-    """训练起点权重：统一指向 models/，文件不存在时由 ultralytics 下到那里"""
+    """训练起点权重：统一指向 weight/，文件不存在时由 ultralytics 下到那里"""
     _unify_weights_dir()
     return str(MODELS_DIR / Path(weights).name)
 

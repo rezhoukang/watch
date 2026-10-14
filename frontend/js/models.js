@@ -1,4 +1,4 @@
-import { el, api } from './core.js';
+import { el, api } from './core.js?v=61';
 
 /* ==================== 环境状态 ==================== */
 
@@ -50,6 +50,10 @@ function syncModeUi(selId, wrapId) {
     hint.textContent = headMode
       ? (RTDETR_STATUS.available ? (prefix === 'vid' ? 'RT-DETRv4 按人头统计人数，输入尺寸 640。' : '按人头统计人数；人体框不计入。可调大 imgsz 检测远处小人头。') : RTDETR_STATUS.message)
       : '';
+    if (name.toLowerCase().includes('pose')) {
+      hint.hidden = false;
+      hint.textContent = 'Pose：人体框 + 17 个关键点骨架，显示关键点置信度 ≥ 0.5 的连线。选择 Pose 权重时使用独立姿态推理。';
+    }
   }
 }
 
@@ -100,11 +104,11 @@ function readDetectOptions(prefix) {
   const weights = headDetection ? 'medium.pt' : el(`${prefix}Weights`).value || DEFAULT_WEIGHTS;
   const isWorld = WORLD_WEIGHTS.includes(weights);
   const classes = !headDetection && isWorld ? el(`${prefix}Classes`).value.trim() : '';
-  const mergeIou = headDetection ? Number(el(`${prefix}MergeIou`).value || 0) : 0;
-  const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || 0) : 0;
+  const mergeIou = headDetection ? Number(el(`${prefix}MergeIou`).value || '0.1') : 0;
+  const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || '0.45') : 0;
   if (!Number.isFinite(mergeIou) || mergeIou < 0 || mergeIou > 1) throw new Error('合并 IoU 阈值必须在 0 到 1 之间');
   if (!Number.isFinite(mergeConfidence) || mergeConfidence < 0 || mergeConfidence > 1) throw new Error('自定义 IoU 的置信度门槛必须在 0 到 1 之间');
-  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
+  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
 }
 
 const previousHeadOptions = new Map();
