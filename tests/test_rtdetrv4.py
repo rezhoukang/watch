@@ -9,6 +9,7 @@ from PIL import Image
 import app
 import rtdetrv4
 import vision
+import inference_history
 
 
 class HeadDetectionTests(unittest.TestCase):
@@ -85,8 +86,10 @@ class ApiTests(unittest.TestCase):
             Image.new("RGB", (160, 90)).save(src)
             ready = {"available": True, "message": "ready"}
             with patch.object(app, "UPLOAD_DIR", src.parent), patch.object(rtdetrv4, "status", return_value=ready), \
+                 patch.object(inference_history, "HISTORY_DIR", src.parent / "history"), \
                  patch.object(vision, "yolo_available", return_value=(False, "missing")), \
-                 patch.object(vision, "detect_image", return_value={"mode": "rtdetrv4", "person_count": 3}) as detect:
+                 patch.object(vision, "detect_image", return_value={"mode": "rtdetrv4", "person_count": 3,
+                     "detections": [{"bbox": [1, 1, 10, 10]}] * 3}) as detect:
                 response = self.client.post(f"/api/detect/image/{src.name}", params={"weights": rtdetrv4.WEIGHTS_NAME})
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.json()["person_count"], 3)

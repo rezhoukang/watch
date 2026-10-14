@@ -348,11 +348,11 @@ el('hoverPreview').querySelector('img').addEventListener('load', () => {
   if (hoverEv) placeHoverPreview(hoverEv);
 });
 
-/* ==================== 图片推理：图库 / 结果 两个子页面 ==================== */
+/* ==================== 图片推理：待推理图库 / 当前结果 / 历史结果图库 ==================== */
 
-const SUBTAB_PANES = { images: 'detect-pane-images', result: 'detect-pane-result' };
+const SUBTAB_PANES = { images: 'detect-pane-images', result: 'detect-pane-result', history: 'detect-pane-history' };
 
-/** pane: 'images' | 'result' */
+/** pane: 'images' | 'result' | 'history' */
 function switchSubPane(pane) {
   Object.entries(SUBTAB_PANES).forEach(([key, id]) => {
     el(id).classList.toggle('active', key === pane);
@@ -362,6 +362,7 @@ function switchSubPane(pane) {
   });
   el('refreshImages').hidden = pane !== 'images';
   if (pane !== 'images') hideHoverPreview();
+  if (pane === 'history') loadInferenceHistory();
   window.scrollTo(0, 0);
 }
 
@@ -397,7 +398,7 @@ function classColorA(i, alpha) {
  */
 function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   const box = opts.root || el('detectResult');
-  const imgUrl = opts.imgUrl || `/images/${encodeURIComponent(filename)}`;
+  const imgUrl = opts.imgUrl || r.source_url || `/images/${encodeURIComponent(filename)}`;
   const dets = Array.isArray(r.detections) ? r.detections : [];
 
   // 类别按出现次数降序，分配固定颜色
@@ -418,6 +419,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
     confMin: Number(confUsed) || 0.01,
     naturalW: 1,
     naturalH: 1,
+    merge: r.merge || null,
     // 去重（后处理，不重跑模型）
     dedup: DEDUP_DEFAULT,
     dedupDist: 20,              // 中心点距离 ≤ 这个像素数 → 视为同一目标
@@ -427,8 +429,8 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   view.q = (sel) => box.querySelector(sel);
   view.qs = (sel) => [...box.querySelectorAll(sel)];
 
-  view.headCounting = r.mode === 'rtdetrv4';
-  const modeLabel = view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
+  view.headCounting = r.mode === 'rtdetrv4' || r.head_count_only;
+  const modeLabel = r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
   const clsNote =
     r.mode === 'world'
       ? `prompt「${(r.classes_used || []).join(', ') || '权重内置'}」`
@@ -459,6 +461,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
         `<option value="small">小框（内嵌）</option>` +
       `</select></label>` +
     `</div>` +
+    (r.merge ? `<div class="merge-note">基准 #${esc(r.merge.base_id.slice(0, 8))}（绿框） ← 待合并 #${esc(r.merge.incoming_id.slice(0, 8))}（橙框）｜新增 ${esc(r.merge.added_count)} 个，重叠舍弃 ${esc(r.merge.discarded_overlaps)} 个</div>` : '') +
     `<div class="viewer" data-role="viewer">` +
       `<img class="base" data-role="baseimg" src="${esc(imgUrl)}" alt="推理图">` +
       `<div class="boxes" data-role="boxes"></div>` +
@@ -466,6 +469,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
     `<div class="viewer-foot">` +
       `<span data-role="count"></span>` +
       (r.result_url ? `<a href="${esc(r.result_url)}" target="_blank">后端渲染图（对照）</a>` : '') +
+      (r.record_url ? `<a href="${esc(r.record_url)}" download="${esc(r.record_id)}.json">下载推理信息 JSON</a>` : '') +
     `</div>` +
     `<div class="det-table-wrap"><table>` +
       `<thead><tr><th>类别</th><th>置信度</th><th>中心 (cx, cy)</th><th>宽 × 高</th>` +
@@ -695,7 +699,9 @@ function paintDetects(view) {
     const d = view.dets[i];
     const [x1, y1, x2, y2] = d.bbox;
     // 类别色只写一次：CSS 里边框 / 圆点 / 标签底色都取 var(--c)
-    const color = view.colorOf.get(d.class_name) || '#1a73e8';
+    const color = view.merge
+      ? (d.origin_record_id === view.merge.incoming_id ? '#ff9900' : '#00bb66')
+      : view.colorOf.get(d.class_name) || '#1a73e8';
     const pct = (v, total) => `${(v / total) * 100}%`;
 
     if (view.shape === 'fill') {
@@ -706,7 +712,7 @@ function paintDetects(view) {
       node.style.setProperty('--c', color);
       node.style.setProperty(
         '--c-soft',
-        classColorA(Math.max(0, view.classes.indexOf(d.class_name)), 1)
+        view.merge ? color : classColorA(Math.max(0, view.classes.indexOf(d.class_name)), 1)
       );
       node.style.left = pct(x1, view.naturalW);
       node.style.top = pct(y1, view.naturalH);
@@ -888,7 +894,9 @@ async function detectImage(filename) {
     if (!r || !Array.isArray(r.detections)) {
       throw new Error(`后端返回数据不完整：${JSON.stringify(r).slice(0, 200)}`);
     }
+    if (ticker !== null) { clearInterval(ticker); ticker = null; }
     renderDetectResult(r, filename, conf, (Date.now() - t0) / 1000, imgsz);
+    loadInferenceHistory();
 
     // 刷新图库缩略图（失败不影响已显示的结果）
     try {
@@ -905,6 +913,131 @@ async function detectImage(filename) {
 }
 
 el('refreshImages').addEventListener('click', loadImages);
+
+/* ==================== 历史推理图库与定向合并 ==================== */
+
+let INFERENCE_RECORDS = [];
+let MERGE_BUSY = false;
+
+function recordLabel(record) {
+  const time = new Date(record.created_at).toLocaleString('zh-CN');
+  const model = record.kind === 'merge' ? '合并结果' : (record.weight || record.mode);
+  return `${record.source}｜${model}｜${record.count} 个｜${time} #${record.record_id.slice(0, 8)}`;
+}
+
+function syncMergeChoices(preferredIncoming = null) {
+  const baseSel = el('mergeBase');
+  const incomingSel = el('mergeIncoming');
+  const oldIncoming = preferredIncoming || incomingSel.value;
+  const base = INFERENCE_RECORDS.find((r) => r.record_id === baseSel.value);
+  incomingSel.replaceChildren();
+  const compatible = base ? INFERENCE_RECORDS.filter((r) => r.input_sha256 === base.input_sha256 && r.record_id !== base.record_id) : [];
+  compatible.forEach((record) => {
+    const option = document.createElement('option'); option.value = record.record_id; option.textContent = recordLabel(record);
+    incomingSel.appendChild(option);
+  });
+  if (compatible.some((r) => r.record_id === oldIncoming)) incomingSel.value = oldIncoming;
+  if (!compatible.length) {
+    const option = document.createElement('option'); option.value = ''; option.textContent = '暂无同一原图的其他推理记录';
+    incomingSel.appendChild(option);
+  }
+  baseSel.disabled = MERGE_BUSY || !INFERENCE_RECORDS.length;
+  incomingSel.disabled = MERGE_BUSY || !compatible.length;
+  const incoming = compatible.find((r) => r.record_id === incomingSel.value);
+  [['mergeBasePreview', base], ['mergeIncomingPreview', incoming]].forEach(([id, record]) => {
+    const image = el(id); image.hidden = !record;
+    if (record) image.src = record.result_url;
+    else image.removeAttribute('src');
+  });
+  el('mergeInferenceBtn').disabled = MERGE_BUSY || !base || !incoming;
+  el('swapMerge').disabled = MERGE_BUSY || !base || !incoming;
+  document.querySelectorAll('#inferenceHistoryGrid figure').forEach((figure) => {
+    figure.classList.toggle('is-base', figure.dataset.id === base?.record_id);
+    figure.classList.toggle('is-incoming', figure.dataset.id === incoming?.record_id);
+  });
+}
+
+async function openInferenceRecord(recordId) {
+  switchSubPane('result');
+  const box = el('detectResult'); box.textContent = '正在加载历史推理记录…';
+  try {
+    const record = await api(`/api/inferences/${encodeURIComponent(recordId)}`);
+    el('detResultName').textContent = `${record.source} · ${new Date(record.created_at).toLocaleString('zh-CN')} #${record.record_id.slice(0, 8)}`;
+    renderDetectResult(record, record.source, record.kind === 'merge' ? 0.01 : record.parameters.confidence,
+      record.elapsed_seconds || 0, record.imgsz);
+  } catch (error) { showError(box, error, '历史记录加载失败'); }
+}
+
+async function loadInferenceHistory() {
+  try {
+    const data = await api('/api/inferences');
+    INFERENCE_RECORDS = data.records || [];
+    el('inferenceHistoryStatus').textContent = INFERENCE_RECORDS.length
+      ? `共 ${INFERENCE_RECORDS.length} 条记录，点击缩略图查看保存的结果与参数。绿色边框为基准，橙色边框为待合并。`
+      : '暂无记录。每次图片推理完成后自动保存原图、带框图、参数和坐标。';
+    const grid = el('inferenceHistoryGrid'); grid.replaceChildren();
+    INFERENCE_RECORDS.forEach((record) => {
+      const figure = document.createElement('figure'); figure.dataset.id = record.record_id;
+      figure.tabIndex = 0; figure.setAttribute('role', 'button'); figure.title = recordLabel(record);
+      const params = record.parameters || {};
+      figure.innerHTML = `<img src="${esc(record.result_url)}" alt="${esc(record.source)} 推理结果" loading="lazy">` +
+        `<figcaption>${esc(record.source)}<br>${esc(record.kind === 'merge' ? '合并结果' : record.weight)} · ${esc(record.count)} 个<br>` +
+        `${record.kind === 'merge' ? '重叠保留基准' : `conf ${esc(params.confidence)} · imgsz ${esc(record.imgsz)}`}<br>` +
+        `${esc(new Date(record.created_at).toLocaleString('zh-CN'))} #${esc(record.record_id.slice(0, 8))}</figcaption>`;
+      figure.addEventListener('click', () => openInferenceRecord(record.record_id));
+      figure.addEventListener('keydown', (e) => { if (e.target === figure && e.key === 'Enter') openInferenceRecord(record.record_id); });
+      const actions = document.createElement('div'); actions.className = 'history-card-actions';
+      [['基准', 'base'], ['待合并', 'incoming']].forEach(([label, role]) => {
+        const button = document.createElement('button'); button.className = 'btn small ghost'; button.textContent = `设为${label}`;
+        button.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (role === 'base') { el('mergeBase').value = record.record_id; syncMergeChoices(); }
+          else {
+            const base = INFERENCE_RECORDS.find((r) => r.record_id === el('mergeBase').value);
+            if (!base || base.record_id === record.record_id || base.input_sha256 !== record.input_sha256) {
+              el('mergeStatus').textContent = '请先选择同一原图的另一条记录作为基准。'; return;
+            }
+            syncMergeChoices(record.record_id);
+          }
+          el('mergeStatus').textContent = '';
+        });
+        actions.appendChild(button);
+      });
+      figure.appendChild(actions); grid.appendChild(figure);
+    });
+    const select = el('mergeBase'); const previous = select.value; select.replaceChildren();
+    INFERENCE_RECORDS.forEach((record) => {
+      const option = document.createElement('option'); option.value = record.record_id; option.textContent = recordLabel(record);
+      select.appendChild(option);
+    });
+    if (INFERENCE_RECORDS.some((r) => r.record_id === previous)) select.value = previous;
+    select.disabled = !INFERENCE_RECORDS.length;
+    syncMergeChoices();
+  } catch (error) { el('inferenceHistoryStatus').textContent = '记录加载失败：' + error.message; }
+}
+
+el('refreshInferenceHistory').addEventListener('click', loadInferenceHistory);
+el('mergeBase').addEventListener('change', () => { el('mergeStatus').textContent = ''; syncMergeChoices(); });
+el('mergeIncoming').addEventListener('change', () => syncMergeChoices());
+el('swapMerge').addEventListener('click', () => {
+  const oldBase = el('mergeBase').value; const oldIncoming = el('mergeIncoming').value;
+  if (!oldBase || !oldIncoming) return;
+  el('mergeBase').value = oldIncoming; syncMergeChoices(oldBase);
+  el('mergeStatus').textContent = '已交换合并方向。';
+});
+el('mergeInferenceBtn').addEventListener('click', async () => {
+  if (MERGE_BUSY) return;
+  MERGE_BUSY = true; syncMergeChoices();
+  const status = el('mergeStatus'); status.textContent = '正在合并…';
+  try {
+    const result = await api('/api/inferences/merge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ base_id: el('mergeBase').value, incoming_id: el('mergeIncoming').value }) });
+    await loadInferenceHistory();
+    await openInferenceRecord(result.record_id);
+    status.textContent = '合并完成，已另存为新记录。';
+  } catch (error) { status.textContent = '合并失败：' + error.message; }
+  finally { MERGE_BUSY = false; syncMergeChoices(); }
+});
 
 /* ==================== 视频推理 ==================== */
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=33">
+<link rel="stylesheet" href="/style.css?v=34">
 </head>
 <body>
 <div class="app">
@@ -45,7 +45,7 @@
     </div>
   </section>
 
-  <!-- ========== 图片推理（图库 / 结果 两个子页面）========== -->
+  <!-- ========== 图片推理（待推理图片 / 推理结果 / 推理结果图片）========== -->
   <section class="panel" id="tab-detect">
     <div class="toolbar">
       <label>置信度 <input type="number" id="detConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
@@ -58,6 +58,7 @@
     <nav class="subnav">
       <button class="subtab active" data-sub="images">待推理图片</button>
       <button class="subtab" data-sub="result">推理结果</button>
+      <button class="subtab" data-sub="history">推理结果图片</button>
       <div class="subnav-right">
         <span class="subnav-status" id="detResultName"></span>
         <button class="btn small ghost" id="refreshImages">刷新列表</button>
@@ -70,6 +71,19 @@
 
     <div class="subpanel" id="detect-pane-result">
       <div id="detectResult" class="result-box">点击「待推理图片」里的图片开始推理</div>
+    </div>
+    <div class="subpanel" id="detect-pane-history">
+      <div class="result-box history-merge">
+        <div class="merge-heading"><b>合并推理结果</b><button class="btn small ghost" id="refreshInferenceHistory">刷新记录</button></div>
+        <p class="hint">选择同一张原图的两条记录。待合并框只要与基准框有面积重叠，就保留基准框；其余框加入新记录。原记录保留。</p>
+        <div class="merge-columns">
+          <div class="merge-branch"><label>基准记录（优先保留）<select id="mergeBase"></select></label><img id="mergeBasePreview" alt="基准结果预览" hidden></div>
+          <div class="merge-branch"><label>待合并记录 → 基准<select id="mergeIncoming"></select></label><img id="mergeIncomingPreview" alt="待合并结果预览" hidden></div>
+        </div>
+        <div class="merge-actions"><button class="btn small ghost" id="swapMerge">交换方向</button><button class="btn small" id="mergeInferenceBtn" disabled>合并并保存新记录</button><span id="mergeStatus" role="status"></span></div>
+      </div>
+      <p id="inferenceHistoryStatus" class="hint" role="status"></p>
+      <div class="grid" id="inferenceHistoryGrid"></div>
     </div>
   </section>
 
@@ -222,6 +236,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=44"></script>
+<script src="/app.js?v=45"></script>
 </body>
 </html>

@@ -449,6 +449,22 @@ input[type="number"] { width: 88px; }
   border-radius: 8px;
 }
 .viewer .boxes { position: absolute; inset: 0; }
+.history-merge { margin-bottom: 16px; }
+.merge-heading, .merge-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.merge-heading { justify-content: space-between; }
+.merge-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 12px 0; }
+.merge-branch { border: 2px solid #00bb66; border-radius: 8px; padding: 12px; min-width: 0; }
+.merge-branch + .merge-branch { border-color: #ff9900; }
+.merge-branch label { display: grid; gap: 8px; font-weight: 600; }
+.merge-branch select { width: 100%; min-width: 0; }
+.merge-branch img { max-height: 240px; margin: 10px auto 0; object-fit: contain; }
+.merge-branch img[hidden] { display: none; }
+.history-card-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 8px; }
+#inferenceHistoryGrid figure { border: 2px solid transparent; }
+#inferenceHistoryGrid figure.is-base { border-color: #00bb66; }
+#inferenceHistoryGrid figure.is-incoming { border-color: #ff9900; }
+.merge-note { padding: 8px 12px; background: #f1f3f4; border-radius: 6px; margin-bottom: 10px; }
+@media (max-width: 700px) { .merge-columns { grid-template-columns: 1fr; } }
 
 /* 显示方式切换（框 / 中心点） */
 .seg { display: inline-flex; border: 1px solid #dadce0; border-radius: 8px; overflow: hidden; }
@@ -565,6 +581,7 @@ input[type="number"] { width: 88px; }
 
 .viewer-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   margin: 10px 0 4px;
