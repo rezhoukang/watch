@@ -11,7 +11,10 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from PIL import Image as PILImage
 
 BASE_DIR = Path(__file__).resolve().parent
 WEIGHTS_NAME = "best_stg2.safetensors"
@@ -67,11 +70,12 @@ class _HeadDetector:
         # 'engine' is a generic upstream package name; reject another engine
         # already imported rather than silently constructing the wrong model.
         engine = sys.modules.get("engine")
-        if engine is not None and Path(engine.__file__).resolve().parent != repo / "engine":
+        engine_file = getattr(engine, "__file__", None) if engine is not None else None
+        if engine is not None and (engine_file is None or Path(engine_file).resolve().parent != repo / "engine"):
             raise RuntimeError("已加载其他 engine 包，请在独立进程中运行 RT-DETRv4")
         sys.path.insert(0, str(repo))
         try:
-            from engine.core import YAMLConfig
+            from engine.core import YAMLConfig  # type: ignore[reportMissingImports]
         finally:
             sys.path.remove(str(repo))
 
@@ -96,11 +100,12 @@ class _HeadDetector:
 
     def predict(self, image: Any, imgsz: int) -> tuple[Any, Any, Any]:
         import torch
+        from PIL import Image as PILImage
         from torchvision.transforms import functional as F
 
         # Match official inference: RGB, square resize, float [0,1]; no letterbox
         # or ImageNet normalization. orig_target_sizes is [width, height].
-        resized = F.resize(image, [imgsz, imgsz])
+        resized = cast(PILImage.Image, F.resize(image, [imgsz, imgsz]))
         tensor = F.to_tensor(resized).unsqueeze(0).to(self.device)
         orig_size = torch.tensor([list(image.size)], device=self.device)
         with torch.inference_mode():
@@ -140,7 +145,7 @@ def _head_detections(labels, boxes, scores, width: int, height: int, conf: float
     return detections
 
 
-def detect_pil(image: Any, conf: float = 0.2, imgsz: int = 640) -> tuple[list[dict], str]:
+def detect_pil(image: PILImage.Image, conf: float = 0.2, imgsz: int = 640) -> tuple[list[dict], str]:
     """Run on an RGB PIL image in memory, shared by image and video inference."""
     global _detector
     width, height = image.size

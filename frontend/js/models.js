@@ -34,18 +34,21 @@ function syncModeUi(selId, wrapId) {
   if (el(`${prefix}HeadDetection`).checked) {
     el(wrapId).hidden = true;
     el(`${prefix}ModelHint`).hidden = false;
-    el(`${prefix}ModelHint`).textContent = 'head检测：medium.pt ≥ 0.45 为基准，RT-DETRv4 ≥ 0.2 补齐；两路 imgsz 固定 640。仅加入与所有基准框 IoU 为 0 的人头框。';
+    el(`${prefix}ModelHint`).textContent = el(`${prefix}RtdetrBase`).checked
+      ? `head检测：RT-DETRv4 ≥ 0.25 为基准，medium.pt ≥ 0.45 补齐；两路 imgsz 固定 640。IoU 超过 ${el(`${prefix}MergeIou`).value || 0} 保留 RT-DETR，否则补入 medium。`
+      : `head检测：medium.pt ≥ 0.45 为基准，RT-DETRv4 ≥ 0.25 补齐；两路 imgsz 固定 640。IoU 超过 ${el(`${prefix}MergeIou`).value || 0} 保留 medium，否则补入 RT-DETR。`;
+    el(`${prefix}ModelHint`).textContent += ` 仅待补入框置信度 > ${el(`${prefix}MergeConfidence`).value || 0} 时使用自定义 IoU，其余仍按 IoU=0。`;
     return;
   }
   if (prefix !== 'det') el(`${prefix}ModelHint`).hidden = true;
   const name = el(selId).value || '';
   el(wrapId).hidden = !WORLD_WEIGHTS.includes(name);
-  if (selId === 'detWeights') {
+  if (selId === 'detWeights' || selId === 'vidWeights') {
     const headMode = name === RTDETR_STATUS?.weight;
-    const hint = el('detModelHint');
+    const hint = el(`${prefix}ModelHint`);
     hint.hidden = !headMode;
     hint.textContent = headMode
-      ? (RTDETR_STATUS.available ? '按人头统计人数；人体框不计入。可调大 imgsz 检测远处小人头。' : RTDETR_STATUS.message)
+      ? (RTDETR_STATUS.available ? (prefix === 'vid' ? 'RT-DETRv4 按人头统计人数，输入尺寸 640。' : '按人头统计人数；人体框不计入。可调大 imgsz 检测远处小人头。') : RTDETR_STATUS.message)
       : '';
   }
 }
@@ -64,7 +67,7 @@ async function loadEnv() {
 
     const all = s.weights.length ? s.weights : [DEFAULT_WEIGHTS];
     fillSelect('detWeights', s.image_weights || all, s.default_image_weights || DEFAULT_WEIGHTS);
-    fillSelect('vidWeights', all, DEFAULT_WEIGHTS);   // 视频推理：全部权重
+    fillSelect('vidWeights', s.video_weights || all, DEFAULT_WEIGHTS);
     fillSelect('trainWeights', all, DEFAULT_WEIGHTS); // 训练：全部权重（含 World，迁移起点与推理一致）
     fillSelect('annWeights', all, DEFAULT_WEIGHTS);   // 标注器：全部权重（与推理一致）
 
@@ -97,12 +100,19 @@ function readDetectOptions(prefix) {
   const weights = headDetection ? 'medium.pt' : el(`${prefix}Weights`).value || DEFAULT_WEIGHTS;
   const isWorld = WORLD_WEIGHTS.includes(weights);
   const classes = !headDetection && isWorld ? el(`${prefix}Classes`).value.trim() : '';
-  return { weights, isWorld, classes, headDetection, isRtdetr: weights === RTDETR_STATUS?.weight };
+  const mergeIou = headDetection ? Number(el(`${prefix}MergeIou`).value || 0) : 0;
+  const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || 0) : 0;
+  if (!Number.isFinite(mergeIou) || mergeIou < 0 || mergeIou > 1) throw new Error('合并 IoU 阈值必须在 0 到 1 之间');
+  if (!Number.isFinite(mergeConfidence) || mergeConfidence < 0 || mergeConfidence > 1) throw new Error('自定义 IoU 的置信度门槛必须在 0 到 1 之间');
+  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
 }
 
 const previousHeadOptions = new Map();
 function syncHeadDetection(prefix) {
   const enabled = el(`${prefix}HeadDetection`).checked;
+  el(`${prefix}RtdetrBase`).disabled = !enabled;
+  el(`${prefix}MergeIou`).disabled = !enabled;
+  el(`${prefix}MergeConfidence`).disabled = !enabled;
   const ids = [`${prefix}Weights`, `${prefix}Conf`, ...(prefix === 'det' ? ['detImgsz'] : [])];
   if (enabled) {
     if (!previousHeadOptions.has(prefix)) previousHeadOptions.set(prefix, ids.map((id) => el(id).value));
@@ -116,6 +126,9 @@ function syncHeadDetection(prefix) {
 }
 ['det', 'vid', 'ann'].forEach((prefix) => {
   el(`${prefix}HeadDetection`).addEventListener('change', () => syncHeadDetection(prefix));
+  el(`${prefix}RtdetrBase`).addEventListener('change', () => syncModeUi(`${prefix}Weights`, `${prefix}ClassesWrap`));
+  el(`${prefix}MergeIou`).addEventListener('input', () => syncModeUi(`${prefix}Weights`, `${prefix}ClassesWrap`));
+  el(`${prefix}MergeConfidence`).addEventListener('input', () => syncModeUi(`${prefix}Weights`, `${prefix}ClassesWrap`));
 });
 
 

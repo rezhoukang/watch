@@ -20,6 +20,8 @@ class Element {
   }
   querySelectorAll() { return []; }
   removeAttribute() {}
+  scrollIntoView() {}
+  getBoundingClientRect() { return { left: 0 }; }
   setAttribute() {}
 }
 const root = path.resolve(__dirname, '../frontend');
@@ -72,6 +74,17 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(calls.includes('/api/datasets'));
   assert(calls.includes('/api/inferences'));
   assert.equal(nodes.get('envStatus').className, 'badge ok');
+  responses['/test-chart.json'] = { head_counts: [[100, 2], [150, 8], [200, 5]], fps: 25, start_frame: 100 };
+  const player = nodes.get('videoResult').querySelector('video');
+  player.readyState = 1; player.duration = 10;
+  modules.get(path.join(root, 'js/charts.js')).namespace.showHeadChart('/test-chart.json');
+  await flush();
+  const chart = nodes.get('chartHost').children.at(-1);
+  assert.equal(chart.querySelector('.headchart-stats').textContent, '最高人数：8 人 ｜ 最低人数：2 人 ｜ 全局平均人数：5.00 人');
+  const chartScroll = chart.querySelector('.headchart-scroll');
+  chartScroll.scrollLeft = 0;
+  chartScroll.events.click({ clientX: 293 });
+  assert.equal(player.currentTime, 2, 'Trimmed video seeks relative to start_frame');
   nodes.get('detConf').value = '0.38'; nodes.get('detImgsz').value = '960';
   nodes.get('detHeadDetection').checked = true;
   nodes.get('detHeadDetection').events.change();
@@ -91,10 +104,22 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     assert.equal(nodes.get(`${prefix}Conf`).value, '0.45');
     assert.equal(nodes.get(`${prefix}Weights`).disabled, true);
     assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).headDetection, true);
+    nodes.get(`${prefix}MergeIou`).value = '0.3';
+    nodes.get(`${prefix}MergeConfidence`).value = '0.5';
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).mergeIou, 0.3);
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).mergeConfidence, 0.5);
+    nodes.get(`${prefix}RtdetrBase`).checked = true;
+    nodes.get(`${prefix}RtdetrBase`).events.change();
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).rtdetrBase, true);
+    assert(nodes.get(`${prefix}ModelHint`).textContent.includes('RT-DETRv4 ≥ 0.25 为基准'));
     nodes.get(`${prefix}HeadDetection`).checked = false;
     nodes.get(`${prefix}HeadDetection`).events.change();
     assert.equal(nodes.get(`${prefix}Conf`).value, '0.7');
     assert.equal(nodes.get(`${prefix}Weights`).disabled, false);
+    assert.equal(nodes.get(`${prefix}RtdetrBase`).disabled, true);
+    assert.equal(nodes.get(`${prefix}MergeIou`).disabled, true);
+    assert.equal(nodes.get(`${prefix}MergeConfidence`).disabled, true);
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).rtdetrBase, false);
   }
   let opened, deleted;
   modules.get(path.join(root, 'js/viewer.js')).namespace.renderDetectResult({

@@ -1,5 +1,5 @@
 """datasets: extracted API routes; URLs and response formats are unchanged."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 import vision
 import head_fusion
@@ -82,6 +82,9 @@ def prelabel_image(
     classes: str | None = None,
     imgsz: int = 640,
     head_detection: bool = False,
+    rtdetr_base: bool = False,
+    merge_iou: float = Query(default=0.0, ge=0, le=1),
+    merge_confidence: float = Query(default=0.0, ge=0, le=1),
 ) -> dict:
     """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。
@@ -104,7 +107,7 @@ def prelabel_image(
     ds_classes = vision.dataset_classes(ds_dir)
 
     try:
-        fused = head_fusion.detect_image(img_path) if head_detection else None
+        fused = head_fusion.detect_image(img_path, rtdetr_base=rtdetr_base, merge_iou=merge_iou, merge_confidence=merge_confidence) if head_detection else None
         dets = fused["detections"] if fused is not None else vision.prelabel_image(
             img_path, weights=weights, conf=conf, classes=class_list, imgsz=imgsz
         )
@@ -138,7 +141,7 @@ def prelabel_image(
     )
     return {"ok": True, "detections": mapped, "classes": ds_classes,
             "head_detection": head_detection, "fusion": fused["fusion"] if fused else None,
-            "parameters": head_fusion.parameters() if head_detection else None}
+            "parameters": head_fusion.parameters(rtdetr_base, merge_iou, merge_confidence) if head_detection else None}
 
 
 @router.post("/api/annotate/save/{filename:path}", summary="标注器：保存标注到 YOLO label 文件")

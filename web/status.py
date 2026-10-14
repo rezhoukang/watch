@@ -27,6 +27,7 @@ def yolo_status() -> dict:
         "default_weights": vision.DEFAULT_WEIGHTS,  # 前端下拉框默认选中它
         "clip_available": vision.clip_available(),  # World 所需的文本编码器依赖
         "image_weights": weights + [rtdetrv4.WEIGHTS_NAME],
+        "video_weights": weights + [rtdetrv4.WEIGHTS_NAME],
         "default_image_weights": rtdetrv4.WEIGHTS_NAME if head_model["available"] else vision.DEFAULT_WEIGHTS,
         "model_labels": {rtdetrv4.WEIGHTS_NAME: rtdetrv4.MODEL_NAME},
         "rtdetrv4": head_model,

@@ -36,6 +36,7 @@
   font-weight: 400;
   color: #9aa0a6;
 }
+.headchart-stats { padding: 0 12px 8px; font-size: 13px; font-weight: 600; color: #202124; }
 .headchart-scroll {
   overflow-x: auto;
   padding: 10px 0 6px;

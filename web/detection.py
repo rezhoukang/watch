@@ -1,6 +1,6 @@
 """detection: extracted API routes; URLs and response formats are unchanged."""
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 import vision
 import inference_history
 import head_fusion
@@ -19,6 +19,9 @@ def detect_image(
     classes: str | None = None,
     imgsz: int = 640,
     head_detection: bool = False,
+    rtdetr_base: bool = False,
+    merge_iou: float = Query(default=0.0, ge=0, le=1),
+    merge_confidence: float = Query(default=0.0, ge=0, le=1),
 ) -> dict:
     if head_detection:
         common._require_head_detection()
@@ -42,13 +45,13 @@ def detect_image(
 
     try:
         record_id, snapshot = inference_history.begin_record(src)
-        result = head_fusion.detect_image(snapshot) if head_detection else vision.detect_image(
+        result = head_fusion.detect_image(snapshot, rtdetr_base=rtdetr_base, merge_iou=merge_iou, merge_confidence=merge_confidence) if head_detection else vision.detect_image(
             snapshot, weights=weights, conf=conf, classes=class_list, imgsz=imgsz, save_result=False
         )
         result["elapsed_seconds"] = round(time.perf_counter() - t0, 3)
         result = inference_history.complete_record(
             record_id, snapshot, result,
-            head_fusion.parameters() if head_detection else
+            head_fusion.parameters(rtdetr_base, merge_iou, merge_confidence) if head_detection else
             {"confidence": conf, "weights": weights, "classes": class_list, "imgsz": imgsz},
             kind="merge" if head_detection else "inference",
         )
@@ -81,18 +84,14 @@ def detect_video(
     render: str = "box",
     line_width: int = 2,
     head_detection: bool = False,
+    rtdetr_base: bool = False,
+    merge_iou: float = Query(default=0.0, ge=0, le=1),
+    merge_confidence: float = Query(default=0.0, ge=0, le=1),
 ) -> dict:
     if head_detection:
         common._require_head_detection()
         weights, conf, classes = head_fusion.BASE_WEIGHTS, head_fusion.BASE_CONFIDENCE, None
-    common._require_yolo_weights(weights)
-    available, message = vision.yolo_available()
-    if not available:
-        raise HTTPException(status_code=503, detail=f"YOLO 不可用：{message}")
-
-    ok, reason = vision.world_ready(weights)
-    if not ok:
-        raise HTTPException(status_code=503, detail=reason)
+    common._require_image_backend(weights)
 
     src = common._safe_file(common.VIDEO_DIR, filename)
     stride = max(1, min(stride, 30))
@@ -121,6 +120,9 @@ def detect_video(
             render=render,
             line_width=line_width,
             head_detection=head_detection,
+            rtdetr_base=rtdetr_base,
+            merge_iou=merge_iou,
+            merge_confidence=merge_confidence,
         )
     except Exception as e:  # noqa: BLE001
         common.logger.exception("提交视频推理任务失败：%s", filename)
@@ -142,4 +144,6 @@ def detect_video(
         render,
         line_width,
     )
-    return {"job_id": job_id, "head_detection": head_detection}
+    return {"job_id": job_id, "head_detection": head_detection, "rtdetr_base": head_detection and rtdetr_base,
+            "merge_iou": merge_iou if head_detection else 0.0,
+            "merge_confidence": merge_confidence if head_detection else 0.0}

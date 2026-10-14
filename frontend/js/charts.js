@@ -51,12 +51,14 @@ if (_chartCloseBtn) _chartCloseBtn.addEventListener('click', hideHeadChart);
  */
 function renderHeadChart(host, chartUrl) {
   host.innerHTML = '';
+  const video = el('videoResult').querySelector('video');
 
   const wrap = document.createElement('div');
   wrap.className = 'headchart';
   wrap.innerHTML =
     `<div class="headchart-head">` +
     `<span class="headchart-hint">⇔ 滚动/拖动平移 ｜ Ctrl+滚轮 缩放宽度</span></div>` +
+    `<div class="headchart-stats" aria-live="polite"></div>` +
     `<div class="headchart-scroll"><div class="headchart-track"></div></div>`;
   host.appendChild(wrap);
 
@@ -127,22 +129,39 @@ function renderHeadChart(host, chartUrl) {
   );
 
   // 按住拖动平移（像时间轴一样）
-  let dragging = false, dragStartX = 0, dragStartScroll = 0;
+  let dragging = false, dragMoved = false, dragStartX = 0, dragStartScroll = 0;
   scroll.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
     dragging = true;
+    dragMoved = false;
     dragStartX = e.clientX;
     dragStartScroll = scroll.scrollLeft;
     scroll.classList.add('dragging');
   });
   window.addEventListener('mousemove', (e) => {
     if (!dragging) return;
+    if (Math.abs(e.clientX - dragStartX) > 4) dragMoved = true;
     scroll.scrollLeft = dragStartScroll - (e.clientX - dragStartX);
   });
   window.addEventListener('mouseup', () => {
     if (!dragging) return;
     dragging = false;
     scroll.classList.remove('dragging');
+  });
+
+  // 帧号使用原视频时间轴；推理结果视频从 start_frame 开始。
+  scroll.addEventListener('click', (e) => {
+    if (dragMoved || !video || !view?.all.length) return;
+    const frame = xToFrame(e.clientX - scroll.getBoundingClientRect().left + scroll.scrollLeft);
+    const nearest = view.all.reduce((best, point) =>
+      Math.abs(point[0] - frame) < Math.abs(best[0] - frame) ? point : best
+    );
+    const seek = () => {
+      const seconds = Math.max(0, (nearest[0] - view.startFrame) / view.fps);
+      video.currentTime = Number.isFinite(video.duration) ? Math.min(seconds, video.duration) : seconds;
+    };
+    if (video.readyState >= 1) seek();
+    else video.addEventListener('loadedmetadata', seek, { once: true });
   });
 
   function draw() {
@@ -271,13 +290,23 @@ function renderHeadChart(host, chartUrl) {
         all: raw,
         points: condense(raw, 5000),   // 点太多时降采样，避免 SVG 卡顿
         fps: (d && d.fps) || 25,
+        startFrame: Number(d?.start_frame) || 0,
         firstFrame: raw.length ? raw[0][0] : 0,
         lastFrame: raw.length ? raw[raw.length - 1][0] : 0,
       };
+      // 统计全部原始采样数据，不使用用于绘图的降采样点。
+      const stats = wrap.querySelector('.headchart-stats');
+      if (raw.length) {
+        const totals = raw.reduce((acc, [, count]) => ({
+          min: Math.min(acc.min, count), max: Math.max(acc.max, count), sum: acc.sum + count,
+        }), { min: Infinity, max: -Infinity, sum: 0 });
+        stats.textContent = `最高人数：${totals.max} 人 ｜ 最低人数：${totals.min} 人 ｜ 全局平均人数：${(totals.sum / raw.length).toFixed(2)} 人`;
+        stats.title = '按本次推理时间段的全部采样帧计算；抽帧间隔大于 1 时使用实际推理帧。';
+      }
       // 标题补充总帧数
       const hint = wrap.querySelector('.headchart-hint');
       if (hint && raw.length) {
-        hint.textContent = `共 ${raw.length} 个采样帧 ｜ ⇔ 滚动/拖动平移 ｜ Ctrl+滚轮 缩放`;
+        hint.textContent = `共 ${raw.length} 个采样帧 ｜ 点击跳转视频 ｜ ⇔ 滚动/拖动平移 ｜ Ctrl+滚轮 缩放`;
       }
       // 初始宽度：让整条曲线大约铺满视口（留一点余量，可继续缩放）
       const range = Math.max(1, view.lastFrame - view.firstFrame);

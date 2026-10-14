@@ -498,6 +498,9 @@ def start_video_job(
     render: str = "box",
     line_width: int = 2,
     head_detection: bool = False,
+    rtdetr_base: bool = False,
+    merge_iou: float = 0.0,
+    merge_confidence: float = 0.0,
 ) -> str:
     """启动视频推理后台任务，返回 job_id
 
@@ -507,8 +510,11 @@ def start_video_job(
     render: "box" 框 / "dot" 中心点（密集小目标用点更清晰）
     """
     _ensure_dirs()
+    head_fusion_mod: Any = None
     if head_detection:
         import head_fusion
+
+        head_fusion_mod = head_fusion
         weights, conf, classes = head_fusion.BASE_WEIGHTS, head_fusion.BASE_CONFIDENCE, None
     job_id = uuid.uuid4().hex[:12]
     JOBS[job_id] = {
@@ -521,11 +527,12 @@ def start_video_job(
         "result_url": None,
         "head_counts": [],   # 每帧 head 类检出数（折线图数据），形如 [(frame_idx, count)]
         "head_detection": head_detection,
-        "parameters": head_fusion.parameters() if head_detection else {"weights": weights, "confidence": conf},
+        "rtdetr_base": head_detection and rtdetr_base,
+        "parameters": head_fusion_mod.parameters(rtdetr_base, merge_iou, merge_confidence) if head_detection else {"weights": weights, "confidence": conf},
     }
     threading.Thread(
         target=_run_video_job,
-        args=(job_id, src, weights, conf, stride, classes, start, end, render, line_width, head_detection),
+        args=(job_id, src, weights, conf, stride, classes, start, end, render, line_width, head_detection, rtdetr_base, merge_iou, merge_confidence),
         daemon=True,
     ).start()
     return job_id
@@ -543,6 +550,9 @@ def _run_video_job(
     render: str = "box",
     line_width: int = 2,
     head_detection: bool = False,
+    rtdetr_base: bool = False,
+    merge_iou: float = 0.0,
+    merge_confidence: float = 0.0,
 ) -> None:
     job = JOBS[job_id]
     cap = None
@@ -555,7 +565,8 @@ def _run_video_job(
         import json
         import head_fusion
 
-        model = get_model(weights, classes=classes)
+        standalone_rtdetr = rtdetrv4.is_weights(weights) and not head_detection
+        model = None if standalone_rtdetr else get_model(weights, classes=classes)
         cap = cv2.VideoCapture(str(src))
         if not cap.isOpened():
             raise RuntimeError("无法打开视频文件")
@@ -580,13 +591,17 @@ def _run_video_job(
         else:
             tag = ""
         # 点模式在文件名上标记，避免和框模式互相覆盖
-        render_tag = ("_head" if head_detection else "") + ("" if render == "box" else "_dot")
+        render_tag = (("_head_rtdetrbase" if rtdetr_base else "_head") if head_detection else "_rtdetrv4" if standalone_rtdetr else "") + ("" if render == "box" else "_dot")
+        if head_detection and merge_iou > 0:
+            render_tag += f"_iou{merge_iou:g}"
+            if merge_confidence > 0:
+                render_tag += f"_gate{merge_confidence:g}"
         out_path = OUTPUT_DIR / f"{src.stem}_det{render_tag}{tag}.mp4"
         if head_detection:
             detection_path = OUTPUT_DIR / "detections" / f"{out_path.stem}.jsonl"
             detection_path.parent.mkdir(parents=True, exist_ok=True)
             detection_file = detection_path.open("w", encoding="utf-8")
-            detection_file.write(json.dumps({"parameters": head_fusion.parameters(), "fps": fps,
+            detection_file.write(json.dumps({"parameters": head_fusion.parameters(rtdetr_base, merge_iou, merge_confidence), "fps": fps,
                                             "stride": stride, "start_frame": f0}, ensure_ascii=False) + "\n")
 
         # H.264（avc1）让浏览器能直接播放；mp4v 是 MPEG-4 Part 2，<video> 不支持。
@@ -621,23 +636,36 @@ def _run_video_job(
             # 按 stride 抽帧推理，其余帧复用上一帧结果
             if idx % stride == 0:
                 if head_detection:
-                    fused = head_fusion.detect_frame(frame, model)
+                    assert detection_file is not None and detection_path is not None
+                    fused = head_fusion.detect_frame(frame, model, rtdetr_base=rtdetr_base, merge_iou=merge_iou, merge_confidence=merge_confidence)
                     n = fused["count"]
                     head_count = sum(1 for det in fused["detections"] if "head" in det["class_name"].lower())
                     detection_file.write(json.dumps({"frame_index": f0 + idx, "time_seconds": (f0+idx)/fps,
                                                     "detections": fused["detections"], "fusion": fused["fusion"]},
                                                    ensure_ascii=False) + "\n")
+                    last_annotated = head_fusion.annotate_frame(frame.copy(), fused, render, line_width)
+                elif standalone_rtdetr:
+                    from PIL import Image
+
+                    detections, _ = rtdetrv4.detect_pil(Image.fromarray(frame[:, :, ::-1]), conf, 640)
+                    for detection in detections:
+                        detection["source_model"] = rtdetrv4.WEIGHTS_NAME
+                    n = head_count = len(detections)
+                    last_annotated = head_fusion.annotate_frame(
+                        frame.copy(), {"detections": detections}, render, line_width
+                    )
                 else:
+                    assert model is not None
                     r = model.predict(source=frame, conf=conf, device=dev, verbose=False)[0]
                     n, head_count = len(r.boxes), _count_class(r, "head")
+                    last_annotated = _annotate_frame(
+                        frame.copy(), r, render=render, line_width=line_width
+                    )
                 # 人数折线图数据：记录每帧 head 类检出数（stride 抽帧，中间帧不推理）
                 job["head_counts"].append([f0 + idx, head_count])
                 # 目标数最多的一帧 = 信息量最大（召回率代理指标）
                 if best is None or n > best["count"]:
                     best = _collect_best_frame(frame, f0 + idx, n)
-                last_annotated = head_fusion.annotate_frame(frame.copy(), fused, render, line_width) if head_detection else _annotate_frame(
-                    frame.copy(), r, render=render, line_width=line_width
-                )
             writer.write(last_annotated if last_annotated is not None else frame)
 
             idx += 1
@@ -647,6 +675,7 @@ def _run_video_job(
         cap.release()
         writer.release()
         if detection_file:
+            assert detection_path is not None
             detection_file.close()
             job["detections_url"] = f"/outputs/detections/{detection_path.name}"
 

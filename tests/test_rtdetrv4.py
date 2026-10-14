@@ -102,13 +102,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["detail"], "install dependencies")
 
-    def test_model_is_image_only(self):
+    def test_model_supports_image_and_video_but_not_yolo_training(self):
         with patch.object(vision, "yolo_available", return_value=(True, "ready")), \
              patch.object(vision, "clip_available", return_value=True):
             state = self.client.get("/api/yolo/status").json()
         self.assertIn(rtdetrv4.WEIGHTS_NAME, state["image_weights"])
+        self.assertIn(rtdetrv4.WEIGHTS_NAME, state["video_weights"])
         self.assertNotIn(rtdetrv4.WEIGHTS_NAME, state["weights"])
-        for route in ["/api/detect/video/example.mp4", "/api/train",
+        for route in ["/api/train",
                       "/api/annotate/prelabel/example/train/test.png"]:
             with self.subTest(route=route):
                 response = self.client.post(route, params={"weights": rtdetrv4.WEIGHTS_NAME, "dataset": "example"})

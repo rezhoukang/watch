@@ -62,7 +62,13 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   view.qs = (sel) => [...box.querySelectorAll(sel)];
 
   view.headCounting = r.mode === 'rtdetrv4' || r.head_count_only;
-  const modeLabel = r.fusion ? 'head检测（medium 0.45 + RT-DETRv4 0.2，imgsz 640）' : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
+  const rtdetrBase = !!r.fusion?.rtdetr_base;
+  const fusionBase = rtdetrBase ? 'RT-DETRv4' : 'medium';
+  const fusionIncoming = rtdetrBase ? 'medium' : 'RT-DETRv4';
+  const baseConf = r.parameters?.base?.confidence ?? (rtdetrBase ? 0.2 : 0.45);
+  const incomingConf = r.parameters?.incoming?.confidence ?? (rtdetrBase ? 0.45 : 0.2);
+  const rtConf = rtdetrBase ? baseConf : incomingConf;
+  const modeLabel = r.fusion ? `head检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
   const clsNote =
     r.mode === 'world'
       ? `prompt「${(r.classes_used || []).join(', ') || '权重内置'}」`
@@ -71,7 +77,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   box.innerHTML =
     `<div class="result-head">${esc(filename)}` +
       `<span class="meta">${esc(modeLabel)}｜${esc(r.weight || '')}｜${esc(clsNote)}｜` +
-      `${r.fusion ? '推理阈值：基准 0.45 / 补充 0.2' : `推理阈值 ${esc(confUsed)}`}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
+      `${r.fusion ? `推理阈值：${fusionBase} 基准 ${esc(baseConf)} / ${fusionIncoming} 补充 ${esc(incomingConf)}` : `推理阈值 ${esc(confUsed)}`}｜imgsz ${esc(r.imgsz || imgsz)}｜耗时 ${elapsed.toFixed(1)}s</span></div>` +
     `<div class="viewer-bar">` +
       `<div class="seg" data-role="shape">` +
         `<button class="seg-btn active" data-shape="box">框</button>` +
@@ -93,8 +99,9 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
         `<option value="small">小框（内嵌）</option>` +
       `</select></label>` +
     `</div>` +
-    (r.merge ? `<div class="merge-note">基准 #${esc(r.merge.base_id.slice(0, 8))}（绿框） ← 待合并 #${esc(r.merge.incoming_id.slice(0, 8))}（橙框）｜新增 ${esc(r.merge.added_count)} 个，重叠舍弃 ${esc(r.merge.discarded_overlaps)} 个</div>` : '') +
-    (r.fusion ? `<div class="merge-note">medium 基准 ${esc(r.fusion.base_count)} 个（绿框）｜RT-DETRv4 新增 ${esc(r.fusion.added_count)} 个（橙框），重叠舍弃 ${esc(r.fusion.discarded_overlaps)} 个。保留原类别；跨类别重叠同样保留基准框。</div>` : '') +
+    (r.merge ? `<div class="merge-note">基准 #${esc(r.merge.base_id.slice(0, 8))}（绿框） ← 待合并 #${esc(r.merge.incoming_id.slice(0, 8))}（橙框）｜合并 IoU ≤ ${esc(r.merge.merge_iou ?? 0)}｜新增 ${esc(r.merge.added_count)} 个，超过阈值舍弃 ${esc(r.merge.discarded_overlaps)} 个</div>` : '') +
+    (r.fusion ? `<div class="merge-note">${fusionBase} 基准 ${esc(r.fusion.base_count)} 个（绿框）｜${fusionIncoming} 新增 ${esc(r.fusion.added_count)} 个（橙框），超过阈值舍弃 ${esc(r.fusion.discarded_overlaps)} 个。合并 IoU ≤ ${esc(r.fusion.merge_iou ?? 0)}；超过阈值时保留基准框，跨类别同样适用。</div>` : '') +
+    (r.merge || r.fusion ? `<div class="merge-note">以上自定义 IoU 仅适用于待补入框置信度 &gt; ${esc((r.merge || r.fusion).merge_confidence ?? 0)}；低于或等于该置信度时，仍要求 IoU=0。</div>` : '') +
     `<div class="viewer" data-role="viewer">` +
       `<img class="base" data-role="baseimg" src="${esc(imgUrl)}" alt="推理图">` +
       `<div class="boxes" data-role="boxes"></div>` +

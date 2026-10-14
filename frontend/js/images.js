@@ -128,8 +128,8 @@ async function detectImage(filename) {
     const headDetection = !!el('detHeadDetection').checked;
     const conf = headDetection ? '0.45' : el('detConf').value || '0.38';
     const imgsz = headDetection ? '640' : el('detImgsz').value || '640';
-    const { weights, isWorld, classes, isRtdetr } = readDetectOptions('det');
-    const modeText = headDetection ? 'head检测｜medium 0.45 + RT-DETRv4 0.2｜IoU=0 补齐' : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
+    const { weights, isWorld, classes, isRtdetr, rtdetrBase, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
+    const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : '普通 YOLO';
 
@@ -153,7 +153,8 @@ async function detectImage(filename) {
       `/api/detect/image/${encodeURIComponent(filename)}` +
       `?conf=${encodeURIComponent(conf)}&weights=${encodeURIComponent(weights)}` +
       `&imgsz=${encodeURIComponent(imgsz)}` +
-      (headDetection ? '&head_detection=true' : '') +
+      (headDetection ? `&head_detection=true&merge_iou=${encodeURIComponent(mergeIou)}&merge_confidence=${encodeURIComponent(mergeConfidence)}` : '') +
+      (rtdetrBase ? '&rtdetr_base=true' : '') +
       (classes ? `&classes=${encodeURIComponent(classes)}` : '');
     const r = await api(url, { method: 'POST' }, 300000);
 
@@ -164,6 +165,9 @@ async function detectImage(filename) {
     if (headDetection && (r.mode !== 'head_fusion' || !r.fusion)) {
       throw new Error('head检测未生效：服务返回了普通推理结果。请重启 start.bat 并按 Ctrl+F5 刷新，然后重新推理。');
     }
+    if (rtdetrBase && !r.fusion?.rtdetr_base) throw new Error('RT-DETR 基准未生效，请重启服务后刷新页面。');
+    if (headDetection && Number(r.fusion?.merge_iou ?? 0) !== mergeIou) throw new Error('合并 IoU 阈值未生效，请重启服务后刷新页面。');
+    if (headDetection && Number(r.fusion?.merge_confidence ?? 0) !== mergeConfidence) throw new Error('合并置信度门槛未生效，请重启服务后刷新页面。');
     if (ticker !== null) { clearInterval(ticker); ticker = null; }
     renderImageResult(r, filename, headDetection ? 0.01 : conf, (Date.now() - t0) / 1000, imgsz);
     loadInferenceHistory();
@@ -210,7 +214,7 @@ function recordConfidence(record) {
 
 function recordLabel(record, role = '') {
   const time = new Date(record.created_at).toLocaleString('zh-CN');
-  const model = record.fusion ? 'head检测：medium + RT-DETRv4' : record.kind === 'merge' ? '合并结果' : (record.weight || record.mode);
+  const model = record.fusion ? `head检测：${record.fusion.rtdetr_base ? 'RT-DETRv4 基准 + medium' : 'medium 基准 + RT-DETRv4'}` : record.kind === 'merge' ? '合并结果' : (record.weight || record.mode);
   const color = role === 'base' ? '绿色（基准）' : role === 'incoming' ? '橙色（待合并）'
     : record.kind === 'merge' ? '基准绿 / 新增橙' : '绿色';
   return `${record.source}｜${model}｜${record.count} 个｜置信度 ${recordConfidence(record)}｜${time} #${record.record_id.slice(0, 8)}｜颜色 ${color}`;
@@ -290,7 +294,7 @@ function renderInferenceHistoryGallery() {
       const figure = document.createElement('figure'); figure.dataset.id = record.record_id;
       figure.tabIndex = 0; figure.setAttribute('role', 'button'); figure.title = recordLabel(record);
       figure.innerHTML = `<img src="${esc(record.result_url)}" alt="${esc(record.source)} 推理结果" loading="lazy">` +
-        `<figcaption>${esc(record.source)}<br>${esc(record.fusion ? 'head检测：medium + RT-DETRv4' : record.kind === 'merge' ? '合并结果' : record.weight)} · ${esc(record.count)} 个<br>` +
+        `<figcaption>${esc(record.source)}<br>${esc(record.fusion ? `head检测：${record.fusion.rtdetr_base ? 'RT-DETRv4' : 'medium'} 基准` : record.kind === 'merge' ? '合并结果' : record.weight)} · ${esc(record.count)} 个<br>` +
         `置信度 ${esc(recordConfidence(record))} · imgsz ${esc(record.imgsz)}<br>` +
         `${esc(new Date(record.created_at).toLocaleString('zh-CN'))} #${esc(record.record_id.slice(0, 8))}<br>` +
         `${record.kind === 'merge' ? '颜色：基准绿 / 新增橙' : '颜色：绿色'}</figcaption>`;
@@ -387,7 +391,7 @@ el('mergeInferenceBtn').addEventListener('click', async () => {
   const status = el('mergeStatus'); status.textContent = '正在合并…';
   try {
     const result = await api('/api/inferences/merge', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ base_id: el('mergeBase').value, incoming_id: el('mergeIncoming').value }) });
+      body: JSON.stringify({ base_id: el('mergeBase').value, incoming_id: el('mergeIncoming').value, merge_iou: Number(el('mergeIou').value || 0), merge_confidence: Number(el('mergeConfidence').value || 0) }) });
     await loadInferenceHistory();
     await openInferenceRecord(result.record_id);
     status.textContent = '合并完成，已另存为新记录。';

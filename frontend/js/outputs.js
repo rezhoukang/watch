@@ -16,7 +16,7 @@ async function loadOutputs() {
     outs.forEach((o) => {
       const item = document.createElement('div');
       item.className = 'item';
-      item.innerHTML = `<span class="name">${esc(o.filename)}${o.head_detection ? ' · head检测融合' : ''}</span>`;
+      item.innerHTML = `<span class="name">${esc(o.filename)}${o.head_detection ? ` · head检测融合（${o.parameters?.rtdetr_base ? 'RT-DETR' : 'medium'} 基准）` : ''}</span>`;
 
       const right = document.createElement('span');
       right.className = 'item-actions';
@@ -27,7 +27,13 @@ async function loadOutputs() {
       play.textContent = '预览';
       play.addEventListener('click', () => {
         const r = el('videoResult');
-        r.innerHTML = (o.head_detection ? '<p>head检测融合结果：medium 0.45 + RT-DETRv4 0.2，640</p>' : '') + `<video src="${esc(o.url)}" controls autoplay></video>`;
+        const rtConf = o.parameters?.[o.parameters?.rtdetr_base ? 'base' : 'incoming']?.confidence ?? 0.2;
+        r.innerHTML = (o.head_detection ? `<p>head检测融合结果：${o.parameters?.rtdetr_base ? `RT-DETRv4 ${esc(rtConf)} 基准 + medium 0.45 补齐` : `medium 0.45 基准 + RT-DETRv4 ${esc(rtConf)} 补齐`}，640；合并 IoU ≤ ${esc(o.parameters?.merge_iou ?? 0)}；绿框为基准，橙框为补充。</p>` : '') + `<video src="${esc(o.url)}" controls autoplay></video>`;
+        if (o.head_detection) {
+          const gate = document.createElement('p');
+          gate.textContent = `自定义 IoU 仅用于待补入框置信度 > ${o.parameters?.merge_confidence ?? 0}；其余仍要求 IoU=0。`;
+          r.appendChild(gate);
+        }
         showHeadChart(o.chart_url, o.filename);
       });
 
@@ -43,7 +49,14 @@ async function loadOutputs() {
           document.querySelector('.tab[data-tab="detect"]').click();
           switchSubPane('images');
           el('detHeadDetection').checked = !!o.head_detection;
+          el('detRtdetrBase').checked = !!o.parameters?.rtdetr_base;
+          el('detMergeIou').value = String(o.parameters?.merge_iou ?? 0);
+          el('detMergeConfidence').value = String(o.parameters?.merge_confidence ?? 0);
           el('detHeadDetection').dispatchEvent(new Event('change'));
+          if (!o.head_detection && o.parameters?.weights) {
+            el('detWeights').value = o.parameters.weights;
+            el('detWeights').dispatchEvent(new Event('change'));
+          }
           await loadImages();
           await detectImage(o.best_frame);
         });
@@ -65,11 +78,6 @@ async function loadOutputs() {
       });
 
       right.append(play, del);
-      if (o.detections_url) {
-        const download = document.createElement('a');
-        download.className = 'btn small ghost'; download.href = o.detections_url;
-        download.download = ''; download.textContent = '逐帧坐标'; right.appendChild(download);
-      }
       item.appendChild(right);
       box.appendChild(item);
     });

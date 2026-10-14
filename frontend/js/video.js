@@ -177,12 +177,12 @@ async function detectVideo(filename, btn) {
     const stride = el('vidStride').value || '1';
     const render = el('vidRender').value || 'box';
     const { start, end } = readVideoRange(item);
-    const { weights, isWorld, classes } = readDetectOptions('vid');
+    const { weights, isWorld, classes, isRtdetr, rtdetrBase, mergeIou, mergeConfidence } = readDetectOptions('vid');
     const rangeText = end == null ? `全片` : `${fmtDuration(start)} ~ ${fmtDuration(end)}`;
     const renderText = render === 'dot' ? '中心点' : '框';
-    const modeText = headDetection ? 'head检测｜medium 0.45 + RT-DETRv4 0.2｜640｜IoU=0 补齐' : isWorld
+    const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜640｜IoU ≤ ${mergeIou} 补齐` : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
-      : '普通 YOLO';
+      : isRtdetr ? 'RT-DETRv4 人头检测｜640' : '普通 YOLO';
 
     btn.disabled = true;
     box.innerHTML =
@@ -199,6 +199,9 @@ async function detectVideo(filename, btn) {
     });
     if (end != null) q.set('end', String(end));
     if (headDetection) q.set('head_detection', 'true');
+    if (headDetection) q.set('merge_iou', String(mergeIou));
+    if (headDetection) q.set('merge_confidence', String(mergeConfidence));
+    if (rtdetrBase) q.set('rtdetr_base', 'true');
     if (classes) q.set('classes', classes);
     const res = await api(
       `/api/detect/video/${encodeURIComponent(filename)}?${q}`,
@@ -209,6 +212,9 @@ async function detectVideo(filename, btn) {
       throw new Error(`后端未返回 job_id：${JSON.stringify(res).slice(0, 200)}`);
     }
     if (headDetection && !res.head_detection) throw new Error('head检测未生效，请重启服务后刷新页面重试。');
+    if (rtdetrBase && !res.rtdetr_base) throw new Error('RT-DETR 基准未生效，请重启服务后刷新页面。');
+    if (headDetection && Number(res.merge_iou ?? 0) !== mergeIou) throw new Error('合并 IoU 阈值未生效，请重启服务后刷新页面。');
+    if (headDetection && Number(res.merge_confidence ?? 0) !== mergeConfidence) throw new Error('合并置信度门槛未生效，请重启服务后刷新页面。');
 
     // 轮询期间保持计时
     ticker = setInterval(() => {
@@ -225,9 +231,14 @@ async function detectVideo(filename, btn) {
           box.innerHTML =
             `<div style="color:#f9a825;font-weight:600">已取消推理任务。</div>`;
         } else if (job.result_url) {
-          box.innerHTML = (job.head_detection ? '<p>head检测融合结果：medium 0.45 + RT-DETRv4 0.2，640；绿框为基准，橙框为补充。</p>' : '') +
-            `<video src="${esc(job.result_url)}" controls autoplay></video>` +
-            (job.detections_url ? `<a href="${esc(job.detections_url)}" download>下载逐帧坐标及类别 JSONL</a>` : '');
+          const rtConf = job.parameters?.[job.parameters?.rtdetr_base ? 'base' : 'incoming']?.confidence ?? 0.2;
+          box.innerHTML = (job.head_detection ? `<p>head检测融合结果：${job.parameters?.rtdetr_base ? `RT-DETRv4 ${rtConf} 基准 + medium 0.45 补齐` : `medium 0.45 基准 + RT-DETRv4 ${rtConf} 补齐`}，640；合并 IoU ≤ ${job.parameters?.merge_iou ?? 0}；绿框为基准，橙框为补充。</p>` : '') +
+            `<video src="${esc(job.result_url)}" controls autoplay></video>`;
+          if (job.head_detection) {
+            const gate = document.createElement('p');
+            gate.textContent = `自定义 IoU 仅用于待补入框置信度 > ${job.parameters?.merge_confidence ?? 0}；其余仍要求 IoU=0。`;
+            box.appendChild(gate);
+          }
           // 折线图单独面板显示（不塞在视频下面，避免被大视频挤到看不见）
           showHeadChart(job.chart_url, filename);
         } else {

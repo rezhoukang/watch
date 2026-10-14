@@ -103,7 +103,7 @@ def _require_image_backend(weights: str) -> None:
 
 def _require_yolo_weights(weights: str) -> None:
     if rtdetrv4.is_weights(weights):
-        raise HTTPException(status_code=400, detail="RT-DETRv4 当前仅支持图片人数统计，请在图片推理页使用")
+        raise HTTPException(status_code=400, detail="此操作暂不支持 RT-DETRv4，请在图片或视频推理页使用")
 
 
 def _require_head_detection() -> None:

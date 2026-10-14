@@ -121,9 +121,11 @@ vm.runInContext(source.slice(start).replace(/^export .*$/gm, ''), context);
   assert.equal(el('mergeInferenceBtn').disabled, true);
   assert.equal(el('mergeIncomingPreview').hidden, true);
   el('mergeBase').value = 'b'; el('mergeBase').fire('change');
+  el('mergeIou').value = '0.3';
+  el('mergeConfidence').value = '0.5';
   await el('mergeInferenceBtn').fire('click');
   const merge = requests.find((request) => request.url === '/api/inferences/merge');
-  assert.deepEqual(JSON.parse(merge.options.body), { base_id: 'b', incoming_id: 'a' });
+  assert.deepEqual(JSON.parse(merge.options.body), { base_id: 'b', incoming_id: 'a', merge_iou: 0.3, merge_confidence: 0.5 });
   assert.equal(rendered[0].record_id, 'merged');
   assert.equal(rendered[2], 0.01); // Merge view displays all saved frames initially.
   assert.equal(el('inferenceHistoryGrid').children.length, 4);

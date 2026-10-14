@@ -52,7 +52,7 @@ def merge_inferences(payload: dict) -> dict:
     if not isinstance(base_id, str) or not isinstance(incoming_id, str):
         raise HTTPException(status_code=400, detail="请选择基准和待合并记录")
     try:
-        return inference_history.merge_records(base_id, incoming_id)
+        return inference_history.merge_records(base_id, incoming_id, payload.get("merge_iou", 0.0), payload.get("merge_confidence", 0.0))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except FileNotFoundError as e:

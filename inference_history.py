@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import re
 import shutil
 import uuid
@@ -112,19 +113,43 @@ def list_records() -> list[dict]:
     return sorted(records, key=lambda r: (r["created_at"], r["record_id"]), reverse=True)
 
 
-def overlaps(a: list, b: list) -> bool:
-    # Any positive intersection area, including across different classes.
-    # Touching edges alone have zero area and are retained.
-    return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
+def validate_merge_iou(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError("合并 IoU 阈值必须是 0 到 1 之间的数字")
+    return float(value)
 
 
-def merge_detections(base: list[dict], incoming: list[dict]) -> tuple[list[dict], int, int]:
-    """Keep every baseline box; add only incoming boxes with zero overlap."""
-    added = [det for det in incoming if not any(overlaps(det["bbox"], kept["bbox"]) for kept in base)]
+def validate_merge_confidence(value: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError("自定义 IoU 的置信度门槛必须是 0 到 1 之间的数字")
+    return float(value)
+
+
+def box_iou(a: list, b: list) -> float:
+    intersection = max(0, min(a[2], b[2]) - max(a[0], b[0])) * max(0, min(a[3], b[3]) - max(a[1], b[1]))
+    union = max(0, a[2] - a[0]) * max(0, a[3] - a[1]) + max(0, b[2] - b[0]) * max(0, b[3] - b[1]) - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def overlaps(a: list, b: list, merge_iou: float = 0.0) -> bool:
+    return box_iou(a, b) > merge_iou
+
+
+def merge_detections(base: list[dict], incoming: list[dict], merge_iou: float = 0.0, merge_confidence: float = 0.0) -> tuple[list[dict], int, int]:
+    """Keep every baseline box; reject incoming boxes only above the IoU limit."""
+    merge_iou = validate_merge_iou(merge_iou)
+    merge_confidence = validate_merge_confidence(merge_confidence)
+    added = []
+    for det in incoming:
+        threshold = merge_iou if det.get("confidence", 0) > merge_confidence else 0.0
+        if not any(overlaps(det["bbox"], kept["bbox"], threshold) for kept in base):
+            added.append(det)
     return copy.deepcopy(base + added), len(added), len(incoming) - len(added)
 
 
-def merge_records(base_id: str, incoming_id: str) -> dict:
+def merge_records(base_id: str, incoming_id: str, merge_iou: float = 0.0, merge_confidence: float = 0.0) -> dict:
+    merge_iou = validate_merge_iou(merge_iou)
+    merge_confidence = validate_merge_confidence(merge_confidence)
     if base_id == incoming_id:
         raise ValueError("请选择两条不同的推理记录")
     base, incoming = read_record(base_id), read_record(incoming_id)
@@ -136,7 +161,7 @@ def merge_records(base_id: str, incoming_id: str) -> dict:
     incoming_dets = copy.deepcopy(incoming["detections"])
     for det in incoming_dets:
         det["origin_record_id"] = incoming_id
-    detections, added_count, discarded = merge_detections(base_dets, incoming_dets)
+    detections, added_count, discarded = merge_detections(base_dets, incoming_dets, merge_iou, merge_confidence)
     summary = {}
     for det in detections:
         name = det["class_name"]
@@ -151,7 +176,9 @@ def merge_records(base_id: str, incoming_id: str) -> dict:
     if result["head_count_only"]:
         result["person_count"] = result["head_count"]
     record_id, snapshot = begin_record(source_path(base))
-    return complete_record(record_id, snapshot, result, {"base": base["parameters"], "incoming": incoming["parameters"]},
+    return complete_record(record_id, snapshot, result, {"base": base["parameters"], "incoming": incoming["parameters"], "merge_iou": merge_iou, "merge_confidence": merge_confidence},
                            kind="merge", merge={"base_id": base_id, "incoming_id": incoming_id,
                                                 "discarded_overlaps": discarded, "added_count": added_count,
-                                                "rule": "any_positive_overlap_keep_base"})
+                                                "merge_iou": merge_iou,
+                                                "merge_confidence": merge_confidence,
+                                                "rule": "confidence_gated_iou_keep_base"})

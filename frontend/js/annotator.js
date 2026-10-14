@@ -530,7 +530,7 @@ el('annPrelabel').addEventListener('click', async () => {
   btn.disabled = true;
   annMsg('预标注中…（首次要加载模型，可能较慢）');
   try {
-    const { weights, classes, headDetection } = readDetectOptions('ann');
+    const { weights, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence } = readDetectOptions('ann');
     const q = new URLSearchParams({
       conf: el('annConf').value || '0.38',
       weights,
@@ -538,6 +538,9 @@ el('annPrelabel').addEventListener('click', async () => {
     });
     if (classes) q.set('classes', classes);
     if (headDetection) q.set('head_detection', 'true');
+    if (headDetection) q.set('merge_iou', String(mergeIou));
+    if (headDetection) q.set('merge_confidence', String(mergeConfidence));
+    if (rtdetrBase) q.set('rtdetr_base', 'true');
 
     const res = await api(
       `/api/annotate/prelabel/${ANN.rel}?${q}`,
@@ -545,6 +548,9 @@ el('annPrelabel').addEventListener('click', async () => {
       300000
     );
     if (headDetection && !res.fusion) throw new Error('head检测未生效，请重启服务后刷新页面重试。');
+    if (rtdetrBase && !res.fusion?.rtdetr_base) throw new Error('RT-DETR 基准未生效，请重启服务后刷新页面。');
+    if (headDetection && Number(res.fusion?.merge_iou ?? 0) !== mergeIou) throw new Error('合并 IoU 阈值未生效，请重启服务后刷新页面。');
+    if (headDetection && Number(res.fusion?.merge_confidence ?? 0) !== mergeConfidence) throw new Error('合并置信度门槛未生效，请重启服务后刷新页面。');
     const dets = (res.detections || []).map((d) => ({
       class_id: d.class_id,
       class_name: d.class_name,

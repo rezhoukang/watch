@@ -27,6 +27,25 @@ def result(detections):
 
 
 class HistoryTests(unittest.TestCase):
+    def test_custom_merge_threshold_and_validation(self):
+        base = self.save([detection([0, 0, 10, 10])])
+        incoming = self.save([detection([5, 0, 15, 10])])
+        payload = {"base_id": base["record_id"], "incoming_id": incoming["record_id"], "merge_iou": 0.34, "merge_confidence": 0.5}
+        response = self.client.post('/api/inferences/merge', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        record = response.json()
+        self.assertEqual(record["count"], 2)
+        self.assertEqual(record["parameters"]["merge_iou"], 0.34)
+        self.assertEqual(record["merge"]["merge_iou"], 0.34)
+        self.assertEqual(record["merge"]["merge_confidence"], 0.5)
+        for invalid in (-0.1, 1.1, None, True, "bad"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.client.post('/api/inferences/merge', json={**payload, "merge_iou": invalid}).status_code, 400)
+                self.assertEqual(self.client.post('/api/inferences/merge', json={**payload, "merge_confidence": invalid}).status_code, 400)
+        for invalid in (-0.1, 1.1, "nan"):
+            self.assertEqual(self.client.post('/api/detect/image/test.png', params={"head_detection": True, "merge_iou": invalid}).status_code, 422)
+            self.assertEqual(self.client.post('/api/detect/image/test.png', params={"head_detection": True, "merge_confidence": invalid}).status_code, 422)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

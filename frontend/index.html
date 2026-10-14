@@ -52,6 +52,9 @@
       <label>尺寸 imgsz <input type="number" id="detImgsz" value="640" min="320" max="1920" step="32"></label>
       <label>权重 <select id="detWeights"></select></label>
       <label><input type="checkbox" id="detHeadDetection"> head检测</label>
+      <label><input type="checkbox" id="detRtdetrBase" disabled> 以 RT-DETR 为基准</label>
+      <label title="与任一基准框的 IoU 超过此值时舍弃；调大允许更多重叠框补入">合并 IoU ≤ <input id="detMergeIou" type="number" min="0" max="1" step="0.01" value="0" disabled></label>
+      <label title="待补入框置信度必须高于此值才使用自定义 IoU；低于或等于此值仍要求 IoU=0">自定义 IoU 生效置信度 &gt; <input id="detMergeConfidence" type="number" min="0" max="1" step="0.01" value="0" disabled></label>
       <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" value="" placeholder="person, car, 书本" size="22"></label>
     </div>
     <p id="detModelHint" class="hint" hidden></p>
@@ -82,7 +85,9 @@
     <div class="subpanel" id="detect-pane-history">
       <div class="result-box history-merge">
         <div class="merge-heading"><b>合并推理结果</b><button class="btn small ghost" id="refreshInferenceHistory">刷新记录</button></div>
-        <p class="hint">选择同一张原图的两条记录。待合并框只要与基准框有面积重叠，就保留基准框；其余框加入新记录。原记录保留。</p>
+        <p class="hint">选择同一张原图的两条记录。待合并框与任一基准框的 IoU 超过阈值时舍弃，否则补入。阈值越大，允许的重叠越多；默认 0。原记录保留。</p>
+        <label>合并 IoU ≤ <input id="mergeIou" type="number" min="0" max="1" step="0.01" value="0"></label>
+        <label title="仅待合并框置信度高于此值时使用自定义 IoU，其他框仍按 IoU=0">自定义 IoU 生效置信度 &gt; <input id="mergeConfidence" type="number" min="0" max="1" step="0.01" value="0"></label>
         <div class="merge-columns">
           <div class="merge-branch"><label>基准记录（优先保留）<select id="mergeBase"></select></label><img id="mergeBasePreview" alt="基准结果预览" hidden></div>
           <div class="merge-branch"><label>待合并记录 → 基准<select id="mergeIncoming"></select></label><img id="mergeIncomingPreview" alt="待合并结果预览" hidden></div>
@@ -127,6 +132,9 @@
       </select></label>
       <label>权重 <select id="vidWeights"></select></label>
       <label><input type="checkbox" id="vidHeadDetection"> head检测</label>
+      <label><input type="checkbox" id="vidRtdetrBase" disabled> 以 RT-DETR 为基准</label>
+      <label title="IoU 超过阈值保留基准框，否则补入；调大允许更多重叠">合并 IoU ≤ <input id="vidMergeIou" type="number" min="0" max="1" step="0.01" value="0" disabled></label>
+      <label title="低于或等于此置信度的待补入框仍按 IoU=0">自定义 IoU 生效置信度 &gt; <input id="vidMergeConfidence" type="number" min="0" max="1" step="0.01" value="0" disabled></label>
       <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" value="" placeholder="person, car" size="20"></label>
       <button class="btn small" id="refreshVideos">刷新列表</button>
     </div>
@@ -226,6 +234,9 @@
           <label>置信度 <input type="number" id="annConf" value="0.38" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
           <label>权重 <select id="annWeights"></select></label>
           <label><input type="checkbox" id="annHeadDetection"> head检测</label>
+          <label><input type="checkbox" id="annRtdetrBase" disabled> 以 RT-DETR 为基准</label>
+          <label title="IoU 超过阈值保留基准框，否则补入">合并 IoU ≤ <input id="annMergeIou" type="number" min="0" max="1" step="0.01" value="0" disabled></label>
+          <label title="低于或等于此置信度的待补入框仍按 IoU=0">自定义 IoU 生效置信度 &gt; <input id="annMergeConfidence" type="number" min="0" max="1" step="0.01" value="0" disabled></label>
           <span id="annModelHint" class="hint" hidden></span>
           <label id="annClassesWrap" hidden>prompt <input type="text" id="annClasses" value="" placeholder="person, car" size="18"></label>
           <button class="btn small" id="annPrelabel">预标注</button>
@@ -269,6 +280,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=52"></script>
+<script type="module" src="/app.js?v=57"></script>
 </body>
 </html>
