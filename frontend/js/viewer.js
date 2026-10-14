@@ -1,4 +1,4 @@
-import { el, esc } from './core.js?v=66';
+import { el, esc } from './core.js?v=67';
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 
@@ -70,7 +70,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
   const baseConf = r.parameters?.base?.confidence ?? (rtdetrBase ? 0.2 : 0.45);
   const incomingConf = r.parameters?.incoming?.confidence ?? (rtdetrBase ? 0.45 : 0.2);
   const rtConf = rtdetrBase ? baseConf : incomingConf;
-  const modeLabel = r.fusion ? `head检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : r.pose ? `YOLO Pose 人体骨架｜${r.pose.head_rule?.head_down_r_threshold != null ? `低头 R < ${r.pose.head_rule.head_down_r_threshold}，抬头 R > ${r.pose.head_rule.head_up_r_threshold}` : `R 阈值 ${r.pose.head_rule?.nose_shoulder_threshold ?? 0.13}`}${r.pose.exclude_unknown ? '｜已排除无法判断者' : ''}` : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
+  const modeLabel = r.fusion ? `目标检测（${fusionBase} 基准，medium 0.45 + RT-DETRv4 ${rtConf}，imgsz 640）` : r.mode === 'merged' ? '合并推理结果' : view.headCounting ? 'RT-DETRv4-S C-RADIOv4' : r.pose ? `YOLO Pose 人体骨架｜${r.pose.head_rule?.head_down_r_threshold != null ? `低头 R < ${r.pose.head_rule.head_down_r_threshold}，抬头 R > ${r.pose.head_rule.head_up_r_threshold}` : `R 阈值 ${r.pose.head_rule?.nose_shoulder_threshold ?? 0.13}`}${r.pose.exclude_unknown ? '｜已排除无法判断者' : ''}` : (r.mode === 'world' ? 'YOLO-World' : '普通 YOLO');
   const clsNote =
     r.mode === 'world'
       ? `prompt「${(r.classes_used || []).join(', ') || '权重内置'}」`

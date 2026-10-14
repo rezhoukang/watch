@@ -1,9 +1,9 @@
-import { el, esc, api, banner, showError } from './core.js?v=66';
-import { readDetectOptions } from './models.js?v=66';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=66';
-import { switchSubPane } from './navigation.js?v=66';
-import { renderDetectResult } from './viewer.js?v=66';
-import { importBehaviorRecords } from './annotator.js?v=66';
+import { el, esc, api, banner, showError } from './core.js?v=67';
+import { readDetectOptions } from './models.js?v=67';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=67';
+import { switchSubPane } from './navigation.js?v=67';
+import { renderDetectResult } from './viewer.js?v=67';
+import { importBehaviorRecords } from './annotator.js?v=67';
 
 /* ==================== 图片推理 ==================== */
 
@@ -131,7 +131,7 @@ async function detectImage(filename) {
     const conf = headDetection ? '0.45' : el('detConf').value || '0.38';
     const imgsz = headDetection ? '640' : el('detImgsz').value || '640';
     const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, headDownRThreshold, headUpRThreshold, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
-    const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
+    const modeText = headDetection ? `目标检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';
 
@@ -166,7 +166,7 @@ async function detectImage(filename) {
       throw new Error(`后端返回数据不完整：${JSON.stringify(r).slice(0, 200)}`);
     }
     if (headDetection && (r.mode !== 'head_fusion' || !r.fusion)) {
-      throw new Error('head检测未生效：服务返回了普通推理结果。请重启 start.bat 并按 Ctrl+F5 刷新，然后重新推理。');
+      throw new Error('目标检测未生效：服务返回了普通推理结果。请重启 start.bat 并按 Ctrl+F5 刷新，然后重新推理。');
     }
     if (rtdetrBase && !r.fusion?.rtdetr_base) throw new Error('RT-DETR 基准未生效，请重启服务后刷新页面。');
     if (headDetection && Number(r.fusion?.merge_iou ?? 0) !== mergeIou) throw new Error('合并 IoU 阈值未生效，请重启服务后刷新页面。');
@@ -217,7 +217,7 @@ function recordConfidence(record) {
 
 function recordLabel(record, role = '') {
   const time = new Date(record.created_at).toLocaleString('zh-CN');
-  const model = record.fusion ? `head检测：${record.fusion.rtdetr_base ? 'RT-DETRv4 基准 + medium' : 'medium 基准 + RT-DETRv4'}` : record.kind === 'merge' ? '合并结果' : (record.weight || record.mode);
+  const model = record.fusion ? `目标检测：${record.fusion.rtdetr_base ? 'RT-DETRv4 基准 + medium' : 'medium 基准 + RT-DETRv4'}` : record.kind === 'merge' ? '合并结果' : (record.weight || record.mode);
   const color = role === 'base' ? '绿色（基准）' : role === 'incoming' ? '橙色（待合并）'
     : record.kind === 'merge' ? '基准绿 / 新增橙' : '绿色';
   return `${record.source}｜${model}｜${record.count} 个｜置信度 ${recordConfidence(record)}｜${time} #${record.record_id.slice(0, 8)}｜颜色 ${color}`;
@@ -297,7 +297,7 @@ function renderInferenceHistoryGallery() {
       const figure = document.createElement('figure'); figure.dataset.id = record.record_id;
       figure.tabIndex = 0; figure.setAttribute('role', 'button'); figure.title = recordLabel(record);
       figure.innerHTML = `<img src="${esc(record.result_url)}" alt="${esc(record.source)} 推理结果" loading="lazy">` +
-        `<figcaption>${esc(record.source)}<br>${esc(record.fusion ? `head检测：${record.fusion.rtdetr_base ? 'RT-DETRv4' : 'medium'} 基准` : record.kind === 'merge' ? '合并结果' : record.weight)} · ${esc(record.count)} 个<br>` +
+        `<figcaption>${esc(record.source)}<br>${esc(record.fusion ? `目标检测：${record.fusion.rtdetr_base ? 'RT-DETRv4' : 'medium'} 基准` : record.kind === 'merge' ? '合并结果' : record.weight)} · ${esc(record.count)} 个<br>` +
         `置信度 ${esc(recordConfidence(record))} · imgsz ${esc(record.imgsz)}<br>` +
         `${esc(new Date(record.created_at).toLocaleString('zh-CN'))} #${esc(record.record_id.slice(0, 8))}<br>` +
         `${record.kind === 'merge' ? '颜色：基准绿 / 新增橙' : '颜色：绿色'}</figcaption>`;

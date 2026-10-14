@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=66';
+import { el, api } from './core.js?v=67';
 
 /* ==================== 环境状态 ==================== */
 
@@ -36,8 +36,8 @@ function syncModeUi(selId, wrapId) {
     el(wrapId).hidden = true;
     el(`${prefix}ModelHint`).hidden = false;
     el(`${prefix}ModelHint`).textContent = el(`${prefix}RtdetrBase`).checked
-      ? `head检测：RT-DETRv4 ≥ 0.25 为基准，medium.pt ≥ 0.45 补齐；两路 imgsz 固定 640。IoU 超过 ${el(`${prefix}MergeIou`).value || 0} 保留 RT-DETR，否则补入 medium。`
-      : `head检测：medium.pt ≥ 0.45 为基准，RT-DETRv4 ≥ 0.25 补齐；两路 imgsz 固定 640。IoU 超过 ${el(`${prefix}MergeIou`).value || 0} 保留 medium，否则补入 RT-DETR。`;
+      ? `目标检测：RT-DETRv4 ≥ 0.25 为基准，medium.pt ≥ 0.45 补齐；两路 imgsz 固定 640。IoU 超过 ${el(`${prefix}MergeIou`).value || 0} 保留 RT-DETR，否则补入 medium。`
+      : `目标检测：medium.pt ≥ 0.45 为基准，RT-DETRv4 ≥ 0.25 补齐；两路 imgsz 固定 640。IoU 超过 ${el(`${prefix}MergeIou`).value || 0} 保留 medium，否则补入 RT-DETR。`;
     el(`${prefix}ModelHint`).textContent += ` 仅待补入框置信度 > ${el(`${prefix}MergeConfidence`).value || 0} 时使用自定义 IoU，其余仍按 IoU=0。`;
     return;
   }

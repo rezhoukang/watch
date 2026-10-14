@@ -1,7 +1,7 @@
-import { el, esc, api, banner } from './core.js?v=66';
-import { showHeadChart } from './charts.js?v=66';
-import { switchSubPane } from './navigation.js?v=66';
-import { loadImages, detectImage } from './images.js?v=66';
+import { el, esc, api, banner } from './core.js?v=67';
+import { showHeadChart } from './charts.js?v=67';
+import { switchSubPane } from './navigation.js?v=67';
+import { loadImages, detectImage } from './images.js?v=67';
 
 async function loadOutputs() {
   const box = el('outputList');
@@ -16,7 +16,7 @@ async function loadOutputs() {
     outs.forEach((o) => {
       const item = document.createElement('div');
       item.className = 'item';
-      item.innerHTML = `<span class="name">${esc(o.filename)}${o.head_detection ? ` · head检测融合（${o.parameters?.rtdetr_base ? 'RT-DETR' : 'medium'} 基准）` : ''}</span>`;
+      item.innerHTML = `<span class="name">${esc(o.filename)}${o.head_detection ? ` · 目标检测融合（${o.parameters?.rtdetr_base ? 'RT-DETR' : 'medium'} 基准）` : ''}</span>`;
 
       const right = document.createElement('span');
       right.className = 'item-actions';
@@ -28,7 +28,7 @@ async function loadOutputs() {
       play.addEventListener('click', () => {
         const r = el('videoResult');
         const rtConf = o.parameters?.[o.parameters?.rtdetr_base ? 'base' : 'incoming']?.confidence ?? 0.2;
-        r.innerHTML = (o.head_detection ? `<p>head检测融合结果：${o.parameters?.rtdetr_base ? `RT-DETRv4 ${esc(rtConf)} 基准 + medium 0.45 补齐` : `medium 0.45 基准 + RT-DETRv4 ${esc(rtConf)} 补齐`}，640；合并 IoU ≤ ${esc(o.parameters?.merge_iou ?? 0)}；绿框为基准，橙框为补充。</p>` : '') + `<video src="${esc(o.url)}" controls autoplay></video>`;
+        r.innerHTML = (o.head_detection ? `<p>目标检测融合结果：${o.parameters?.rtdetr_base ? `RT-DETRv4 ${esc(rtConf)} 基准 + medium 0.45 补齐` : `medium 0.45 基准 + RT-DETRv4 ${esc(rtConf)} 补齐`}，640；合并 IoU ≤ ${esc(o.parameters?.merge_iou ?? 0)}；绿框为基准，橙框为补充。</p>` : '') + `<video src="${esc(o.url)}" controls autoplay></video>`;
         if (o.head_detection) {
           const gate = document.createElement('p');
           gate.textContent = `自定义 IoU 仅用于待补入框置信度 > ${o.parameters?.merge_confidence ?? 0}；其余仍要求 IoU=0。`;

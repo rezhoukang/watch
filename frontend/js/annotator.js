@@ -1,7 +1,7 @@
-import { el, esc, api, banner, showError } from './core.js?v=66';
-import { readDetectOptions } from './models.js?v=66';
-import { classColor, classColorA, createPoseLayer } from './viewer.js?v=66';
-import { loadDatasets } from './training.js?v=66';
+import { el, esc, api, banner, showError } from './core.js?v=67';
+import { readDetectOptions } from './models.js?v=67';
+import { classColor, classColorA, createPoseLayer } from './viewer.js?v=67';
+import { loadDatasets } from './training.js?v=67';
 
 /* ==================== 标注（全屏标注器）====================
  * 入口：训练页「标注数据」区选数据集 + Train/Val → 点缩略图进入全屏标注器。
@@ -565,7 +565,7 @@ el('annPrelabel').addEventListener('click', async () => {
       { method: 'POST' },
       300000
     );
-    if (headDetection && !res.fusion) throw new Error('head检测未生效，请重启服务后刷新页面重试。');
+    if (headDetection && !res.fusion) throw new Error('目标检测未生效，请重启服务后刷新页面重试。');
     if (rtdetrBase && !res.fusion?.rtdetr_base) throw new Error('RT-DETR 基准未生效，请重启服务后刷新页面。');
     if (headDetection && Number(res.fusion?.merge_iou ?? 0) !== mergeIou) throw new Error('合并 IoU 阈值未生效，请重启服务后刷新页面。');
     if (headDetection && Number(res.fusion?.merge_confidence ?? 0) !== mergeConfidence) throw new Error('合并置信度门槛未生效，请重启服务后刷新页面。');
@@ -585,7 +585,7 @@ el('annPrelabel').addEventListener('click', async () => {
     ANN.active = -1;
     ANN.dirty = true;
     paintAnn();
-    annMsg(`预标注完成${headDetection ? '（head检测融合）' : ''}：${dets.length} 个目标（改完记得保存）`);
+    annMsg(`预标注完成${headDetection ? '（目标检测融合）' : ''}：${dets.length} 个目标（改完记得保存）`);
   } catch (e) {
     annMsg(`预标注失败：${e instanceof Error ? e.message : String(e)}`);
   } finally {

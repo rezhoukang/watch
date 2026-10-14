@@ -1,8 +1,8 @@
-import { el, esc, api, banner, showError } from './core.js?v=66';
-import { readDetectOptions } from './models.js?v=66';
-import { pollJob } from './jobs.js?v=66';
-import { showHeadChart } from './charts.js?v=66';
-import { loadOutputs } from './outputs.js?v=66';
+import { el, esc, api, banner, showError } from './core.js?v=67';
+import { readDetectOptions } from './models.js?v=67';
+import { pollJob } from './jobs.js?v=67';
+import { showHeadChart } from './charts.js?v=67';
+import { loadOutputs } from './outputs.js?v=67';
 
 /* ==================== 视频推理 ==================== */
 
@@ -180,7 +180,7 @@ async function detectVideo(filename, btn) {
     const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold } = readDetectOptions('vid');
     const rangeText = end == null ? `全片` : `${fmtDuration(start)} ~ ${fmtDuration(end)}`;
     const renderText = render === 'dot' ? '中心点' : '框';
-    const modeText = headDetection ? `head检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜640｜IoU ≤ ${mergeIou} 补齐` : isWorld
+    const modeText = headDetection ? `目标检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜640｜IoU ≤ ${mergeIou} 补齐` : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : isRtdetr ? 'RT-DETRv4 人头检测｜640' : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';
 
@@ -212,7 +212,7 @@ async function detectVideo(filename, btn) {
     if (!res || !res.job_id) {
       throw new Error(`后端未返回 job_id：${JSON.stringify(res).slice(0, 200)}`);
     }
-    if (headDetection && !res.head_detection) throw new Error('head检测未生效，请重启服务后刷新页面重试。');
+    if (headDetection && !res.head_detection) throw new Error('目标检测未生效，请重启服务后刷新页面重试。');
     if (rtdetrBase && !res.rtdetr_base) throw new Error('RT-DETR 基准未生效，请重启服务后刷新页面。');
     if (headDetection && Number(res.merge_iou ?? 0) !== mergeIou) throw new Error('合并 IoU 阈值未生效，请重启服务后刷新页面。');
     if (headDetection && Number(res.merge_confidence ?? 0) !== mergeConfidence) throw new Error('合并置信度门槛未生效，请重启服务后刷新页面。');
@@ -233,7 +233,7 @@ async function detectVideo(filename, btn) {
             `<div style="color:#f9a825;font-weight:600">已取消推理任务。</div>`;
         } else if (job.result_url) {
           const rtConf = job.parameters?.[job.parameters?.rtdetr_base ? 'base' : 'incoming']?.confidence ?? 0.2;
-          box.innerHTML = (job.head_detection ? `<p>head检测融合结果：${job.parameters?.rtdetr_base ? `RT-DETRv4 ${rtConf} 基准 + medium 0.45 补齐` : `medium 0.45 基准 + RT-DETRv4 ${rtConf} 补齐`}，640；合并 IoU ≤ ${job.parameters?.merge_iou ?? 0}；绿框为基准，橙框为补充。</p>` : '') +
+          box.innerHTML = (job.head_detection ? `<p>目标检测融合结果：${job.parameters?.rtdetr_base ? `RT-DETRv4 ${rtConf} 基准 + medium 0.45 补齐` : `medium 0.45 基准 + RT-DETRv4 ${rtConf} 补齐`}，640；合并 IoU ≤ ${job.parameters?.merge_iou ?? 0}；绿框为基准，橙框为补充。</p>` : '') +
             `<video src="${esc(job.result_url)}" controls autoplay></video>`;
           if (job.head_detection) {
             const gate = document.createElement('p');

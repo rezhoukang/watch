@@ -170,7 +170,7 @@ vm.runInContext(source.slice(start).replace(/^export .*$/gm, ''), context);
   assert.equal(bannerText, '');
   el('detHeadDetection').checked = true;
   detectionResponse = { mode: 'yolo', detections: [] };
-  await assert.rejects(vm.runInContext("detectImage('test.png')", context), /head检测未生效/);
+  await assert.rejects(vm.runInContext("detectImage('test.png')", context), /目标检测未生效/);
   detectionResponse = { mode: 'head_fusion', detections: [], fusion: { added_count: 0 } };
   await vm.runInContext("detectImage('test.png')", context);
   assert.equal(rendered[0].mode, 'head_fusion');
