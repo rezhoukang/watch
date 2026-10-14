@@ -147,6 +147,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(deleted, 'example');
   const keypoints = Array.from({ length: 17 }, () => [0, 0, 0]);
   keypoints[5] = [20, 30, 0.9]; keypoints[7] = [40, 50, 0.8]; keypoints[9] = [70, 60, 0.2];
+  keypoints[11] = [80, 70, 0.9];
   modules.get(path.join(root, 'js/viewer.js')).namespace.renderDetectResult({
     mode: 'pose', pose: { skeleton: [[5, 7], [7, 9]], keypoint_confidence: 0.5 },
     detections: [{ class_name: 'person', confidence: 0.9, bbox: [10, 10, 90, 70], keypoints }],
@@ -154,6 +155,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   const poseLayer = viewer.querySelector('[data-role="boxes"]').children.find((node) => node.className === 'pose-layer');
   assert(poseLayer.innerHTML.includes('<line x1="20" y1="30" x2="40" y2="50"/>'));
   assert(!poseLayer.innerHTML.includes('cx="70"'));
+  assert(!poseLayer.innerHTML.includes('cx="80"'));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
   assert.equal(nodes.has('globalBanner'), false);

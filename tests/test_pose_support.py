@@ -18,6 +18,7 @@ from web import common
 def prediction():
     points: list[list[float]] = [[0, 0, 0] for _ in range(17)]
     points[5], points[7], points[9] = [30, 40, 0.9], [50, 60, 0.8], [70, 80, 0.2]
+    points[11], points[13] = [120, 70, 0.9], [140, 85, 0.9]
     data = Mock()
     data.cpu.return_value.tolist.return_value = [points]
     return SimpleNamespace(names={0: "person"}, orig_shape=(100, 200),
@@ -43,18 +44,22 @@ class PoseTests(unittest.TestCase):
                 self.assertEqual(result["pose"]["keypoint_names"], pose_support.KEYPOINT_NAMES)
                 self.assertEqual(result["detections"][0]["keypoints"][5], [30, 40, 0.9])
                 self.assertEqual(len(result["detections"][0]["keypoints"]), 17)
+                self.assertEqual(result["detections"][0]["keypoints"][11], [120, 70, 0.9])
+                self.assertEqual(result["pose"]["display_keypoints"], list(range(11)))
                 saved = client.get(result["record_url"]).json()
                 self.assertEqual(saved["detections"], result["detections"])
                 with Image.open(inference_history.record_dir(result["record_id"]) / "result.png") as image:
                     pixels = image.convert("RGB")
                     self.assertEqual(pixels.getpixel((40, 50)), (0, 188, 212))
                     self.assertEqual(pixels.getpixel((60, 70)), (255, 255, 255))
+                    self.assertEqual(pixels.getpixel((120, 70)), (255, 255, 255))
 
     def test_video_annotation_draws_visible_limbs_and_skips_low_confidence(self):
         frame = np.full((100, 200, 3), 255, dtype=np.uint8)
         result = vision._annotate_frame(frame, prediction())
         self.assertEqual(result[50, 40].tolist(), [212, 188, 0])
         self.assertEqual(result[70, 60].tolist(), [255, 255, 255])
+        self.assertEqual(result[70, 120].tolist(), [255, 255, 255])
         self.assertFalse(pose_support.visible([0, 0, 0.9], 200, 100))
         self.assertFalse(pose_support.visible([300, 10, 0.9], 200, 100))
 

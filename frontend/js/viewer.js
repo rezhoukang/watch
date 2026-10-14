@@ -1,4 +1,4 @@
-import { el, esc } from './core.js?v=61';
+import { el, esc } from './core.js?v=62';
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 
@@ -89,7 +89,7 @@ function renderDetectResult(r, filename, confUsed, elapsed, imgsz, opts = {}) {
       `<label>置信度 ≥ <input type="range" data-role="minconf" min="0.01" max="0.99" step="0.01" value="${esc(confUsed)}">` +
       `<b data-role="minconf-val">${esc(confUsed)}</b></label>` +
       `<label><input type="checkbox" data-role="alwaystag"> 常显标签</label>` +
-      (view.pose ? `<label><input type="checkbox" data-role="skeleton" checked> 骨架（关键点 ≥ ${esc(view.pose.keypoint_confidence)}）</label>` : '') +
+      (view.pose ? `<label><input type="checkbox" data-role="skeleton" checked> 上半身骨架（关键点 ≥ ${esc(view.pose.keypoint_confidence)}）</label>` : '') +
       `<div class="chips" data-role="chips"></div>` +
     `</div>` +
     `<div class="dedup-bar">` +
@@ -418,9 +418,9 @@ function paintDetects(view) {
     shown.forEach((i) => {
       const points = view.dets[i].keypoints || [];
       (view.pose.skeleton || []).forEach(([a, b]) => {
-        if (valid(points[a]) && valid(points[b])) parts.push(`<line x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`);
+        if (a < 11 && b < 11 && valid(points[a]) && valid(points[b])) parts.push(`<line x1="${points[a][0]}" y1="${points[a][1]}" x2="${points[b][0]}" y2="${points[b][1]}"/>`);
       });
-      points.filter(valid).forEach(([x, y]) => parts.push(`<circle cx="${x}" cy="${y}" r="2"/>`));
+      points.slice(0, 11).filter(valid).forEach(([x, y]) => parts.push(`<circle cx="${x}" cy="${y}" r="2"/>`));
     });
     overlay.innerHTML = `<svg viewBox="0 0 ${view.naturalW} ${view.naturalH}" preserveAspectRatio="none" aria-label="人体姿态骨架">${parts.join('')}</svg>`;
     wrap.appendChild(overlay);

@@ -6,14 +6,15 @@ KEYPOINT_NAMES = ["nose", "left_eye", "right_eye", "left_ear", "right_ear",
                   "left_shoulder", "right_shoulder", "left_elbow", "right_elbow",
                   "left_wrist", "right_wrist", "left_hip", "right_hip",
                   "left_knee", "right_knee", "left_ankle", "right_ankle"]
-SKELETON = [[15, 13], [13, 11], [16, 14], [14, 12], [11, 12], [5, 11],
-            [6, 12], [5, 6], [5, 7], [6, 8], [7, 9], [8, 10],
+SKELETON = [[5, 6], [5, 7], [6, 8], [7, 9], [8, 10],
             [1, 2], [0, 1], [0, 2], [1, 3], [2, 4], [3, 5], [4, 6]]
+DISPLAY_KEYPOINTS = list(range(11))
 KEYPOINT_CONFIDENCE = 0.5
 
 
 def metadata() -> dict:
     return {"keypoint_names": KEYPOINT_NAMES, "skeleton": SKELETON,
+            "display_keypoints": DISPLAY_KEYPOINTS, "display_body": "upper",
             "keypoint_confidence": KEYPOINT_CONFIDENCE, "coordinates": "original_image_xy_confidence"}
 
 
@@ -51,7 +52,7 @@ def draw_pil(image, detections: list[dict]) -> None:
         for a, b in SKELETON:
             if visible(points[a], image.width, image.height) and visible(points[b], image.width, image.height):
                 draw.line([tuple(points[a][:2]), tuple(points[b][:2])], fill="#00bcd4", width=2)
-        for point in points:
+        for point in points[:11]:
             if visible(point, image.width, image.height):
                 x, y = point[:2]
                 draw.ellipse((x-2, y-2, x+2, y+2), fill="#ff4081")
@@ -66,6 +67,6 @@ def draw_cv2(frame, poses: list[list[list[float]]]) -> None:
             if visible(points[a], width, height) and visible(points[b], width, height):
                 cv2.line(frame, (int(points[a][0]), int(points[a][1])),
                          (int(points[b][0]), int(points[b][1])), (212, 188, 0), 2)
-        for point in points:
+        for point in points[:11]:
             if visible(point, width, height):
                 cv2.circle(frame, (int(point[0]), int(point[1])), 2, (129, 64, 255), -1)

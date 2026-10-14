@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=61';
+import { el, api } from './core.js?v=62';
 
 /* ==================== 环境状态 ==================== */
 
@@ -52,7 +52,7 @@ function syncModeUi(selId, wrapId) {
       : '';
     if (name.toLowerCase().includes('pose')) {
       hint.hidden = false;
-      hint.textContent = 'Pose：人体框 + 17 个关键点骨架，显示关键点置信度 ≥ 0.5 的连线。选择 Pose 权重时使用独立姿态推理。';
+      hint.textContent = 'Pose：人体框 + 上半身 11 点骨架，显示关键点置信度 ≥ 0.5 的连线。原始 17 个关键点完整保存。';
     }
   }
 }
