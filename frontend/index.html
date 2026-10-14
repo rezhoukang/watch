@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=34">
+<link rel="stylesheet" href="/style.css?v=36">
 </head>
 <body>
 <div class="app">
@@ -66,6 +66,12 @@
     </nav>
 
     <div class="subpanel active" id="detect-pane-images">
+      <div class="gallery-bar">
+        <label><input type="checkbox" id="imageSelectAll"> 全选</label>
+        <button class="btn small ghost" id="imageClearSelection">取消选择</button>
+        <button class="btn small danger" id="imageDeleteSelected" disabled>删除选中图片</button>
+        <span id="imageSelectionCount" role="status">已选 0 张</span>
+      </div>
       <div class="grid" id="imageGrid"></div>
     </div>
 
@@ -83,6 +89,28 @@
         <div class="merge-actions"><button class="btn small ghost" id="swapMerge">交换方向</button><button class="btn small" id="mergeInferenceBtn" disabled>合并并保存新记录</button><span id="mergeStatus" role="status"></span></div>
       </div>
       <p id="inferenceHistoryStatus" class="hint" role="status"></p>
+      <div class="history-filters" aria-label="推理结果图片筛选">
+        <label>分类
+          <select id="historyKindFilter">
+            <option value="all">全部</option>
+            <option value="inference">推理结果图</option>
+            <option value="merge">合并图</option>
+          </select>
+        </label>
+        <label>权重
+          <select id="historyWeightFilter"><option value="all">全部权重</option></select>
+        </label>
+        <label class="history-name-search">名称搜索
+          <input type="search" id="historyNameSearch" placeholder="输入图片名称" autocomplete="off">
+        </label>
+        <button class="btn small ghost" id="historyClearFilters">清除筛选</button>
+      </div>
+      <div class="gallery-bar">
+        <label><input type="checkbox" id="historySelectAll"> 全选</label>
+        <button class="btn small ghost" id="historyClearSelection">取消选择</button>
+        <button class="btn small danger" id="historyDeleteSelected" disabled>删除选中记录</button>
+        <span id="historySelectionCount" role="status">已选 0 张</span>
+      </div>
       <div class="grid" id="inferenceHistoryGrid"></div>
     </div>
   </section>
@@ -236,6 +264,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=45"></script>
+<script src="/app.js?v=48"></script>
 </body>
 </html>

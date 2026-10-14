@@ -19,6 +19,11 @@ class Element {
   addEventListener(name, handler) { this.events[name] = handler; }
   setAttribute() {}
   removeAttribute(name) { delete this[name]; }
+  querySelector(selector) {
+    const all = this.children.flatMap((child) => [child, ...child.descendants()]);
+    return selector === '[data-gallery-select]' ? all.find((child) => Object.hasOwn(child.dataset, 'gallerySelect')) : null;
+  }
+  descendants() { return this.children.flatMap((child) => [child, ...child.descendants()]); }
   fire(name) { return this.events[name]({ target: this, stopPropagation() {} }); }
 }
 
@@ -33,15 +38,33 @@ const record = (id, hash) => ({ record_id: id, input_sha256: hash, source: `${ha
 let records = [record('a', 'image1'), record('b', 'image1'), record('c', 'image2')];
 const requests = [];
 let rendered = null;
+let hovered = null;
+let allowConfirm = true;
+let bannerText = '';
+let images = [{ filename: 'one.png', url: '/one.png' }, { filename: 'two.png', url: '/two.png' }];
 const context = vm.createContext({
   el, console, Date, Set, encodeURIComponent, esc: (x) => String(x),
+  confirm: () => allowConfirm, hideHoverPreview: () => { hovered = null; },
+  showHoverPreview: (src, name) => { hovered = { src, name }; }, placeHoverPreview() {}, hoverEv: null,
+  banner: (message) => { bannerText = message; },
   document: { createElement: (tag) => new Element(tag),
-    querySelectorAll: () => el('inferenceHistoryGrid').children },
+    querySelectorAll: (selector) => selector.includes('#imageGrid') ? el('imageGrid').children : el('inferenceHistoryGrid').children },
   switchSubPane: (pane) => assert.equal(pane, 'result'),
   renderDetectResult: (...args) => { rendered = args; },
   showError: (_, error) => { throw error; },
   api: async (url, options = {}) => {
     requests.push({ url, options });
+    if (url === '/api/inferences/delete') {
+      const items = JSON.parse(options.body).record_ids;
+      records = records.filter((r) => !items.includes(r.record_id));
+      return { deleted: items, missing: [], failed: [] };
+    }
+    if (url === '/api/images/delete') {
+      const items = JSON.parse(options.body).filenames;
+      images = images.filter((r) => !items.includes(r.filename));
+      return { deleted: items, missing: [], failed: [] };
+    }
+    if (url === '/api/images') return { images };
     if (url === '/api/inferences/merge') {
       const merged = { ...record('merged', 'image1'), kind: 'merge', mode: 'merged' };
       records = [merged, ...records]; return merged;
@@ -51,7 +74,12 @@ const context = vm.createContext({
   },
 });
 const source = fs.readFileSync(path.join(__dirname, '../frontend/app.js'), 'utf8');
-const start = source.indexOf('let INFERENCE_RECORDS = [];');
+const html = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
+assert.equal(html.includes('id="deleteMergeBase"'), false);
+assert.equal(html.includes('id="deleteMergeIncoming"'), false);
+const hoverStart = source.indexOf('function bindImageHover(');
+vm.runInContext(source.slice(hoverStart, source.indexOf('// 图片下载完', hoverStart)), context);
+const start = source.indexOf('const GALLERY_STATE = {');
 const end = source.indexOf('async function loadVideos()', start);
 vm.runInContext(source.slice(start, end), context);
 
@@ -62,6 +90,25 @@ vm.runInContext(source.slice(start, end), context);
   assert.equal(el('mergeIncoming').value, 'b');
   assert.equal(el('mergeIncoming').children.length, 1);
   assert.equal(el('mergeInferenceBtn').disabled, false);
+  assert.equal(el('historyWeightFilter').children.length, 2);
+  el('historyNameSearch').value = 'image2'; el('historyNameSearch').fire('input');
+  assert.equal(el('inferenceHistoryGrid').children.length, 1);
+  el('historySelectAll').checked = true; el('historySelectAll').fire('change');
+  assert.equal(vm.runInContext('GALLERY_STATE.history.selected.size', context), 1);
+  el('historyClearFilters').fire('click');
+  assert.equal(el('inferenceHistoryGrid').children.length, 3);
+  assert.equal(vm.runInContext('GALLERY_STATE.history.selected.size', context), 1);
+  el('historyClearSelection').fire('click');
+  const label = el('mergeBase').children[0].textContent;
+  assert(label.indexOf('置信度 0.38') < label.indexOf('2026'));
+  assert(label.indexOf('2026') < label.indexOf('#a'));
+  assert(label.endsWith('颜色 绿色（基准）'));
+  assert(el('mergeIncoming').children[0].textContent.endsWith('颜色 橙色（待合并）'));
+  el('inferenceHistoryGrid').children[0].fire('mouseenter');
+  assert.equal(hovered.src, '/result/a');
+  el('mergeBasePreview').fire('mouseenter');
+  assert.equal(hovered.src, '/result/a');
+  assert.equal(vm.runInContext("recordConfidence({parameters:{base:{confidence:0.38},incoming:{base:{confidence:0.25},incoming:{confidence:0.38}}}})", context), '0.38 / 0.25');
   el('swapMerge').fire('click');
   assert.equal(el('mergeBase').value, 'b');
   assert.equal(el('mergeIncoming').value, 'a');
@@ -76,6 +123,44 @@ vm.runInContext(source.slice(start, end), context);
   assert.equal(rendered[0].record_id, 'merged');
   assert.equal(rendered[2], 0.01); // Merge view displays all saved frames initially.
   assert.equal(el('inferenceHistoryGrid').children.length, 4);
+  el('historyKindFilter').value = 'merge'; el('historyKindFilter').fire('change');
+  assert.equal(el('inferenceHistoryGrid').children.length, 1);
+  el('historyKindFilter').value = 'inference'; el('historyKindFilter').fire('change');
+  assert.equal(el('inferenceHistoryGrid').children.length, 3);
+  el('historyWeightFilter').value = 'test.pt'; el('historyWeightFilter').fire('change');
+  assert.equal(el('inferenceHistoryGrid').children.length, 3);
+  el('historyClearFilters').fire('click');
+  assert.equal(el('inferenceHistoryGrid').children.length, 4);
   assert.equal(requests.some((request) => request.url.startsWith('/api/detect/')), false);
-  console.log('History UI controller checks passed: compatibility, swap direction, merge, saved-record reopening.');
+  const firstCard = el('inferenceHistoryGrid').children[0];
+  const check = firstCard.querySelector('[data-gallery-select]'); check.checked = true; check.fire('change');
+  assert.equal(el('historySelectAll').indeterminate, true);
+  assert.equal(vm.runInContext('GALLERY_STATE.history.selected.size', context), 1);
+  allowConfirm = false;
+  await el('historyDeleteSelected').fire('click');
+  assert.equal(records.length, 4);
+  allowConfirm = true;
+  vm.runInContext("ACTIVE_INFERENCE_ID = 'merged'", context);
+  await el('historyDeleteSelected').fire('click');
+  assert.equal(records.length, 3);
+  assert.equal(vm.runInContext('ACTIVE_INFERENCE_ID', context), null);
+  assert.equal(vm.runInContext('GALLERY_STATE.history.selected.size', context), 0);
+  el('historySelectAll').checked = true; el('historySelectAll').fire('change');
+  assert.equal(vm.runInContext('GALLERY_STATE.history.selected.size', context), 3);
+  await el('historyDeleteSelected').fire('click');
+  assert.equal(records.length, 0);
+  assert.equal(el('mergeBasePreview').hidden, true);
+  assert.equal(el('mergeInferenceBtn').disabled, true);
+  await vm.runInContext('loadImages()', context);
+  el('imageGrid').children[0].fire('mouseenter'); assert.equal(hovered.src, '/one.png');
+  el('imageSelectAll').checked = true; el('imageSelectAll').fire('change');
+  assert.equal(vm.runInContext('GALLERY_STATE.images.selected.size', context), 2);
+  el('imageClearSelection').fire('click');
+  assert.equal(vm.runInContext('GALLERY_STATE.images.selected.size', context), 0);
+  el('imageSelectAll').checked = true; el('imageSelectAll').fire('change');
+  await el('imageDeleteSelected').fire('click');
+  assert.equal(images.length, 0);
+  assert.equal(el('imageSelectAll').disabled, true);
+  assert.equal(bannerText, '');
+  console.log('UI checks passed: record filters, labels, hover, merge direction, selection, cancel, deletion, stale-view cleanup.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -189,6 +189,34 @@ input[type="number"] { width: 88px; }
 }
 .grid figure:hover .del-btn { display: flex; }
 .grid .del-btn:hover { background: #c5221f; }
+.grid .del-btn:disabled { opacity: .45; cursor: not-allowed; }
+.grid .del-btn:focus-visible, .grid figure:focus-within .del-btn { display: flex; }
+.gallery-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 12px 4px; font-size: 13px; }
+.gallery-bar label { display: flex; align-items: center; gap: 6px; }
+.history-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 12px;
+  margin: 12px 0 4px;
+  border: 1px solid #e3e7ed;
+  border-radius: 8px;
+  background: #fafbfc;
+  font-size: 13px;
+}
+.history-filters label { display: flex; align-items: center; gap: 6px; color: #5f6368; }
+.history-filters input[type="search"] {
+  width: min(260px, 55vw);
+  padding: 6px 8px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font: inherit;
+}
+.selection-check { position: absolute; top: 6px; left: 6px; padding: 4px; background: #ffffffeb; border-radius: 5px; line-height: 1; cursor: pointer; }
+.selection-check input { width: 16px; height: 16px; cursor: pointer; accent-color: #1a73e8; }
+.grid figure.is-selected { box-shadow: 0 0 0 2px #1a73e8; background: #eef4ff; }
+@media (hover: none) { .grid .del-btn { display: flex; } }
 
 /* 列表 */
 .list { display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
@@ -657,6 +685,7 @@ input[type="number"] { width: 88px; }
   border: 1px solid #f2c6c2;
 }
 .btn.danger:hover { background: #fce8e6; }
+.btn.danger:disabled { opacity: .45; cursor: not-allowed; }
 
 /* 缩略图悬浮大图预览 */
 .hover-preview {

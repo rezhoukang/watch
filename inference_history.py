@@ -33,6 +33,17 @@ def read_record(record_id: str) -> dict:
     return json.loads((record_dir(record_id) / "record.json").read_text(encoding="utf-8"))
 
 
+def delete_record(record_id: str) -> None:
+    directory = record_dir(record_id)
+    # Validate the absolute target immediately before recursive deletion. Never
+    # follow a record symlink or remove the history root itself.
+    if directory.is_symlink() or directory.resolve() != HISTORY_DIR.resolve() / record_id:
+        raise ValueError("非法推理记录目录")
+    if not (directory / "record.json").is_file():
+        raise FileNotFoundError(record_id)
+    shutil.rmtree(directory)
+
+
 def source_path(record: dict) -> Path:
     name = record["source"]
     if Path(name).name != name or "/" in name or "\\" in name:

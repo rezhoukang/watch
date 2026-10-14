@@ -85,6 +85,71 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/inferences/not-an-id').status_code, 400)
         self.assertEqual(self.client.get('/api/inferences/' + '0'*32).status_code, 404)
 
+    def test_delete_parent_preserves_merged_result_and_pending_image(self):
+        base = self.save([detection([0, 0, 10, 10])])
+        incoming = self.save([detection([20, 10, 30, 20])])
+        merged = history.merge_records(base['record_id'], incoming['record_id'])
+        response = self.client.delete('/api/inferences/' + base['record_id'])
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(history.record_dir(base['record_id']).exists())
+        self.assertTrue(self.src.is_file())
+        self.assertEqual(self.client.get(merged['record_url']).json()['count'], 2)
+        self.assertEqual(self.client.get(merged['source_url']).status_code, 200)
+        self.assertEqual(self.client.get(merged['result_url']).status_code, 200)
+        self.assertEqual(self.client.get(incoming['record_url']).status_code, 200)
+
+    def test_bulk_record_delete_duplicates_missing_and_no_cascade(self):
+        first, second, survivor = self.save([]), self.save([]), self.save([])
+        response = self.client.post('/api/inferences/delete', json={
+            'record_ids': [first['record_id'], first['record_id'], second['record_id'], '0'*32]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['deleted'], [first['record_id'], second['record_id']])
+        self.assertEqual(response.json()['missing'], ['0'*32])
+        self.assertEqual(response.json()['failed'], [])
+        self.assertEqual([r['record_id'] for r in history.list_records()], [survivor['record_id']])
+
+    def test_invalid_batch_does_not_delete_valid_record(self):
+        first = self.save([])
+        for items in ([], [first['record_id'], '../outside'], [first['record_id'], None]):
+            response = self.client.post('/api/inferences/delete', json={'record_ids': items})
+            self.assertEqual(response.status_code, 400)
+            self.assertTrue(history.record_dir(first['record_id']).exists())
+
+    def test_bulk_delete_reports_failed_items_without_losing_survivors(self):
+        first, second = self.save([]), self.save([])
+        original_delete = history.delete_record
+
+        def delete(record_id):
+            if record_id == first['record_id']:
+                raise PermissionError('file locked')
+            original_delete(record_id)
+
+        with patch.object(history, 'delete_record', side_effect=delete):
+            response = self.client.post('/api/inferences/delete', json={'record_ids': [first['record_id'], second['record_id']]})
+        self.assertEqual(response.json()['deleted'], [second['record_id']])
+        self.assertEqual(response.json()['failed'], [{'item': first['record_id'], 'detail': 'file locked'}])
+        self.assertTrue(history.record_dir(first['record_id']).exists())
+        self.assertFalse(history.record_dir(second['record_id']).exists())
+
+    def test_bulk_upload_delete_preserves_history_snapshot(self):
+        record = self.save([])
+        second = self.uploads / 'second.png'
+        Image.new('RGB', (40, 30)).save(second)
+        with patch.object(app, 'UPLOAD_DIR', self.uploads):
+            response = self.client.post('/api/images/delete', json={'filenames': [self.src.name, second.name, 'missing.png']})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['deleted'], [self.src.name, second.name])
+        self.assertEqual(response.json()['missing'], ['missing.png'])
+        self.assertTrue(history.source_path(record).exists())
+        self.assertEqual(self.client.get(record['result_url']).status_code, 200)
+
+    def test_invalid_upload_batch_does_not_delete_any_image(self):
+        with patch.object(app, 'UPLOAD_DIR', self.uploads):
+            for bad in ('../outside.png', 'folder/image.png', 'folder\\image.png'):
+                response = self.client.post('/api/images/delete', json={'filenames': [self.src.name, bad]})
+                self.assertEqual(response.status_code, 400)
+                self.assertTrue(self.src.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

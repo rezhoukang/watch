@@ -203,6 +203,36 @@ def delete_image(filename: str) -> dict:
     return {"ok": True, "filename": filename}
 
 
+def _delete_batch(items: list[str], delete_item) -> dict:
+    deleted, missing, failed = [], [], []
+    for item in dict.fromkeys(items):
+        try:
+            delete_item(item)
+            deleted.append(item)
+        except FileNotFoundError:
+            missing.append(item)
+        except (OSError, ValueError) as e:
+            failed.append({"item": item, "detail": str(e)})
+    return {"deleted": deleted, "missing": missing, "failed": failed}
+
+
+def _delete_items(payload: dict, key: str) -> list[str]:
+    items = payload.get(key)
+    if (not isinstance(items, list) or not 1 <= len(items) <= 1000 or
+            any(not isinstance(item, str) or not item for item in items)):
+        raise HTTPException(status_code=400, detail="请选择 1~1000 项进行删除")
+    return items
+
+
+@app.post("/api/images/delete", summary="批量删除待推理图片")
+def delete_images(payload: dict) -> dict:
+    names = _delete_items(payload, "filenames")
+    # Validate the whole request before changing any files.
+    if any("/" in name or "\\" in name or ".." in name or Path(name).name != name for name in names):
+        raise HTTPException(status_code=400, detail="非法文件名")
+    return _delete_batch(names, lambda name: (UPLOAD_DIR / name).unlink())
+
+
 # ---------- 列表 ----------
 @app.get("/api/images", summary="图片 + 结果列表")
 def list_images() -> dict:
@@ -277,6 +307,30 @@ def _history_record(record_id: str) -> dict:
 def list_inferences() -> dict:
     records = inference_history.list_records()
     return {"count": len(records), "records": records}
+
+
+@app.post("/api/inferences/delete", summary="批量删除推理记录及其图片")
+def delete_inferences(payload: dict) -> dict:
+    record_ids = _delete_items(payload, "record_ids")
+    try:
+        for record_id in record_ids:
+            inference_history.record_dir(record_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _delete_batch(record_ids, inference_history.delete_record)
+
+
+@app.delete("/api/inferences/{record_id}", summary="删除推理记录及其图片")
+def delete_inference(record_id: str) -> dict:
+    try:
+        inference_history.delete_record(record_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail="推理记录不存在") from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
+    return {"ok": True, "record_id": record_id}
 
 
 @app.post("/api/inferences/merge", summary="合并两次推理（重叠保留基准框）")
