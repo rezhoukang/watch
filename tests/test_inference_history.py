@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app
+from web import common
 import inference_history as history
 import rtdetrv4
 import vision
@@ -42,7 +43,7 @@ class HistoryTests(unittest.TestCase):
         return history.complete_record(record_id, snapshot, result(detections), {"confidence": 0.38, "weights": rtdetrv4.WEIGHTS_NAME, "imgsz": 640})
 
     def test_each_inference_has_immutable_original_image_and_metadata(self):
-        with patch.object(app, "UPLOAD_DIR", self.uploads), patch.object(app, "_require_image_backend"), \
+        with patch.object(common, "UPLOAD_DIR", self.uploads), patch.object(common, "_require_image_backend"), \
              patch.object(vision, "detect_image", return_value=result([detection([1, 1, 5, 5])])):
             first = self.client.post('/api/detect/image/' + self.src.name).json()
             Image.new("RGB", (40, 30), "black").save(self.src)
@@ -135,7 +136,7 @@ class HistoryTests(unittest.TestCase):
         record = self.save([])
         second = self.uploads / 'second.png'
         Image.new('RGB', (40, 30)).save(second)
-        with patch.object(app, 'UPLOAD_DIR', self.uploads):
+        with patch.object(common, 'UPLOAD_DIR', self.uploads):
             response = self.client.post('/api/images/delete', json={'filenames': [self.src.name, second.name, 'missing.png']})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['deleted'], [self.src.name, second.name])
@@ -144,7 +145,7 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(self.client.get(record['result_url']).status_code, 200)
 
     def test_invalid_upload_batch_does_not_delete_any_image(self):
-        with patch.object(app, 'UPLOAD_DIR', self.uploads):
+        with patch.object(common, 'UPLOAD_DIR', self.uploads):
             for bad in ('../outside.png', 'folder/image.png', 'folder\\image.png'):
                 response = self.client.post('/api/images/delete', json={'filenames': [self.src.name, bad]})
                 self.assertEqual(response.status_code, 400)

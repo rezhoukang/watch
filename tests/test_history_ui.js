@@ -38,12 +38,15 @@ const record = (id, hash) => ({ record_id: id, input_sha256: hash, source: `${ha
 let records = [record('a', 'image1'), record('b', 'image1'), record('c', 'image2')];
 const requests = [];
 let rendered = null;
+let detectionResponse = null;
 let hovered = null;
 let allowConfirm = true;
 let bannerText = '';
 let images = [{ filename: 'one.png', url: '/one.png' }, { filename: 'two.png', url: '/two.png' }];
 const context = vm.createContext({
   el, console, Date, Set, encodeURIComponent, esc: (x) => String(x),
+  setInterval: () => 1, clearInterval() {},
+  readDetectOptions: () => ({ weights: 'medium.pt', classes: '', isWorld: false, isRtdetr: false }),
   confirm: () => allowConfirm, hideHoverPreview: () => { hovered = null; },
   showHoverPreview: (src, name) => { hovered = { src, name }; }, placeHoverPreview() {}, hoverEv: null,
   banner: (message) => { bannerText = message; },
@@ -54,6 +57,7 @@ const context = vm.createContext({
   showError: (_, error) => { throw error; },
   api: async (url, options = {}) => {
     requests.push({ url, options });
+    if (url.startsWith('/api/detect/image/')) return detectionResponse;
     if (url === '/api/inferences/delete') {
       const items = JSON.parse(options.body).record_ids;
       records = records.filter((r) => !items.includes(r.record_id));
@@ -73,15 +77,15 @@ const context = vm.createContext({
     return records.find((r) => url.endsWith('/' + r.record_id));
   },
 });
-const source = fs.readFileSync(path.join(__dirname, '../frontend/app.js'), 'utf8');
+const source = fs.readFileSync(path.join(__dirname, '../frontend/js/images.js'), 'utf8');
 const html = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
 assert.equal(html.includes('id="deleteMergeBase"'), false);
 assert.equal(html.includes('id="deleteMergeIncoming"'), false);
-const hoverStart = source.indexOf('function bindImageHover(');
-vm.runInContext(source.slice(hoverStart, source.indexOf('// 图片下载完', hoverStart)), context);
+const previewSource = fs.readFileSync(path.join(__dirname, '../frontend/js/preview.js'), 'utf8');
+const hoverStart = previewSource.indexOf('function bindImageHover(');
+vm.runInContext(previewSource.slice(hoverStart, previewSource.indexOf('// 图片下载完', hoverStart)), context);
 const start = source.indexOf('const GALLERY_STATE = {');
-const end = source.indexOf('async function loadVideos()', start);
-vm.runInContext(source.slice(start, end), context);
+vm.runInContext(source.slice(start).replace(/^export .*$/gm, ''), context);
 
 (async () => {
   await vm.runInContext('loadInferenceHistory()', context);
@@ -162,5 +166,15 @@ vm.runInContext(source.slice(start, end), context);
   assert.equal(images.length, 0);
   assert.equal(el('imageSelectAll').disabled, true);
   assert.equal(bannerText, '');
+  el('detHeadDetection').checked = true;
+  detectionResponse = { mode: 'yolo', detections: [] };
+  await assert.rejects(vm.runInContext("detectImage('test.png')", context), /head检测未生效/);
+  detectionResponse = { mode: 'head_fusion', detections: [], fusion: { added_count: 0 } };
+  await vm.runInContext("detectImage('test.png')", context);
+  assert.equal(rendered[0].mode, 'head_fusion');
+  assert.equal(rendered[2], 0.01);
+  const detectionRequests = requests.filter((request) => request.url.startsWith('/api/detect/image/'));
+  assert.equal(detectionRequests.length, 2);
+  assert(detectionRequests.every((request) => request.url.includes('head_detection=true') && request.url.includes('imgsz=640')));
   console.log('UI checks passed: record filters, labels, hover, merge direction, selection, cancel, deletion, stale-view cleanup.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

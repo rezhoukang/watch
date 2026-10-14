@@ -140,12 +140,9 @@ def _head_detections(labels, boxes, scores, width: int, height: int, conf: float
     return detections
 
 
-def detect_image(src: Path, conf: float, imgsz: int, results_dir: Path, save_result: bool = True) -> dict:
+def detect_pil(image: Any, conf: float = 0.2, imgsz: int = 640) -> tuple[list[dict], str]:
+    """Run on an RGB PIL image in memory, shared by image and video inference."""
     global _detector
-    from PIL import Image, ImageDraw
-
-    with Image.open(src) as opened:
-        image = opened.convert("RGB")
     width, height = image.size
     with _lock:
         if _detector is None:
@@ -156,6 +153,16 @@ def detect_image(src: Path, conf: float, imgsz: int, results_dir: Path, save_res
         labels, boxes, scores = _detector.predict(image, imgsz)
         device = _detector.device
     detections = _head_detections(labels, boxes, scores, width, height, conf)
+    return detections, device
+
+
+def detect_image(src: Path, conf: float, imgsz: int, results_dir: Path, save_result: bool = True) -> dict:
+    from PIL import Image, ImageDraw
+
+    with Image.open(src) as opened:
+        image = opened.convert("RGB")
+    width, height = image.size
+    detections, device = detect_pil(image, conf, imgsz)
 
     out_name = ""
     if save_result:

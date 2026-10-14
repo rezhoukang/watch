@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=36">
+<link rel="stylesheet" href="/style.css?v=37">
 </head>
 <body>
 <div class="app">
@@ -51,6 +51,7 @@
       <label>置信度 <input type="number" id="detConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
       <label>尺寸 imgsz <input type="number" id="detImgsz" value="640" min="320" max="1920" step="32"></label>
       <label>权重 <select id="detWeights"></select></label>
+      <label><input type="checkbox" id="detHeadDetection"> head检测</label>
       <label id="detClassesWrap" hidden>prompt <input type="text" id="detClasses" value="" placeholder="person, car, 书本" size="22"></label>
     </div>
     <p id="detModelHint" class="hint" hidden></p>
@@ -125,9 +126,11 @@
         <option value="dot">中心点</option>
       </select></label>
       <label>权重 <select id="vidWeights"></select></label>
+      <label><input type="checkbox" id="vidHeadDetection"> head检测</label>
       <label id="vidClassesWrap" hidden>prompt <input type="text" id="vidClasses" value="" placeholder="person, car" size="20"></label>
       <button class="btn small" id="refreshVideos">刷新列表</button>
     </div>
+    <p id="vidModelHint" class="hint" hidden></p>
     <div class="split">
       <div>
         <h2>视频列表</h2>
@@ -222,6 +225,8 @@
           <label title="关掉后连 hover 也不显示类别标签，只显示框"><input type="checkbox" id="annShowLabels" checked> 标签</label>
           <label>置信度 <input type="number" id="annConf" value="0.38" min="0.01" max="0.99" step="0.05" style="width:70px"></label>
           <label>权重 <select id="annWeights"></select></label>
+          <label><input type="checkbox" id="annHeadDetection"> head检测</label>
+          <span id="annModelHint" class="hint" hidden></span>
           <label id="annClassesWrap" hidden>prompt <input type="text" id="annClasses" value="" placeholder="person, car" size="18"></label>
           <button class="btn small" id="annPrelabel">预标注</button>
           <button class="btn small danger" id="annDeleteAll">清空</button>
@@ -264,6 +269,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script src="/app.js?v=48"></script>
+<script type="module" src="/app.js?v=52"></script>
 </body>
 </html>

@@ -1,0 +1,318 @@
+/* 结果区 */
+.result-box {
+  background: #fff;
+  border-radius: 10px;
+  padding: 16px;
+  min-height: 120px;
+  font-size: 13px;
+  color: #5f6368;
+}
+.result-box img, .result-box video {
+  max-width: 100%;
+  border-radius: 8px;
+  display: block;
+  margin-bottom: 10px;
+}
+
+/* ---- 人数折线图（每帧 head 计数，剪辑时间轴式横向滚动 + Ctrl 缩放） ---- */
+.headchart {
+  margin-top: 6px;
+  border: 1px solid #eceff1;
+  border-radius: 10px;
+  background: #fafbfc;
+  overflow: hidden;
+}
+.headchart-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 12px 0;
+  font-size: 13px;
+  color: #3c4043;
+}
+.headchart-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: #9aa0a6;
+}
+.headchart-scroll {
+  overflow-x: auto;
+  padding: 10px 0 6px;
+  cursor: grab;
+  /* 时间轴风格：细滚动条 */
+  scrollbar-width: thin;
+}
+.headchart-scroll:active { cursor: grabbing; }
+.headchart-track { min-width: 100%; }
+.headchart-track svg.hg-svg { display: block; }
+.hg-grid { stroke: #e2e6ea; stroke-width: 1; }
+.hg-line {
+  stroke: #d93025;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.hg-y { font: 10px system-ui, "Microsoft YaHei", sans-serif; fill: #80868b; text-anchor: end; }
+.hg-x { font: 10px system-ui, "Microsoft YaHei", sans-serif; fill: #9aa0a6; text-anchor: middle; }
+/* 悬停十字线 + 数据点 + 人数气泡 */
+.hg-cursor { stroke: #1a73e8; stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
+.hg-dot { fill: #d93025; stroke: #fff; stroke-width: 1.5; }
+.hg-tip-bg { fill: rgba(32, 33, 36, .9); }
+.hg-tip-tx { font: 10px system-ui, "Microsoft YaHei", sans-serif; fill: #fff; }
+/* 拖动平移时禁用文本选中，光标变成抓手 */
+.headchart-scroll.dragging { cursor: grabbing; user-select: none; }
+.headchart-scroll.dragging .hg-cursor,
+.headchart-scroll.dragging .hg-tip { display: none !important; }
+.headchart-empty {
+  padding: 24px;
+  text-align: center;
+  color: #9aa0a6;
+  font-size: 12px;
+}
+/* 结果图单独子页面后，可以放得更大（尺寸由 .viewer > img.base 控制） */
+.result-head {
+  font-size: 14px;
+  font-weight: 600;
+  color: #3c4043;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+.result-head .meta {
+  font-size: 12px;
+  font-weight: 400;
+  color: #80868b;
+  margin-left: 8px;
+}
+
+/* ---- 推理结果查看器：框由前端渲染，可筛选 + 表格联动 ---- */
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #5f6368;
+}
+.viewer-bar label { display: flex; align-items: center; gap: 6px; }
+.viewer-bar input[type="range"] { width: 140px; accent-color: #1a73e8; }
+.viewer-bar b { color: #1a73e8; min-width: 36px; }
+
+/* 类别筛选胶囊 */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1 1 300px;
+  max-height: 88px;
+  overflow-y: auto;
+}
+.chip {
+  border: 1px solid transparent;
+  border-radius: 20px;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .35);
+}
+.chip.off {
+  background: #f1f3f4 !important;
+  color: #9aa0a6 !important;
+  text-decoration: line-through;
+  text-shadow: none;
+}
+/* 当前图上没有这类框（被置信度/去重筛掉）时淡化显示 */
+.chip.zero { opacity: .5; }
+
+/* 去重控制条 */
+.dedup-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: #fafbfc;
+  border: 1px solid #eceff1;
+  border-radius: 10px;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: #5f6368;
+}
+.dedup-bar label { display: flex; align-items: center; gap: 5px; }
+.dedup-bar input[type="number"] { width: 66px; padding: 4px 6px; }
+.dedup-bar select { padding: 4px 6px; }
+.dedup-bar input[type="checkbox"] { accent-color: #1a73e8; }
+
+/* 图片 + 框叠加层（viewer 尺寸 = 图片显示尺寸，框用百分比定位） */
+.viewer { position: relative; display: inline-block; max-width: 100%; line-height: 0; }
+.viewer > img.base {
+  display: block;
+  max-width: 100%;
+  max-height: 76vh;
+  width: auto;
+  height: auto;
+  /* 必须为 0：任何外边距都会把 .viewer 撑高，导致框层垂直错位 */
+  margin: 0;
+  border-radius: 8px;
+}
+.viewer .boxes { position: absolute; inset: 0; }
+.history-merge { margin-bottom: 16px; }
+.merge-heading, .merge-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.merge-heading { justify-content: space-between; }
+.merge-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 12px 0; }
+.merge-branch { border: 2px solid #00bb66; border-radius: 8px; padding: 12px; min-width: 0; }
+.merge-branch + .merge-branch { border-color: #ff9900; }
+.merge-branch label { display: grid; gap: 8px; font-weight: 600; }
+.merge-branch select { width: 100%; min-width: 0; }
+.merge-branch img { max-height: 240px; margin: 10px auto 0; object-fit: contain; }
+.merge-branch img[hidden] { display: none; }
+.history-card-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 8px; }
+#inferenceHistoryGrid figure { border: 2px solid transparent; }
+#inferenceHistoryGrid figure.is-base { border-color: #00bb66; }
+#inferenceHistoryGrid figure.is-incoming { border-color: #ff9900; }
+.merge-note { padding: 8px 12px; background: #f1f3f4; border-radius: 6px; margin-bottom: 10px; }
+@media (max-width: 700px) { .merge-columns { grid-template-columns: 1fr; } }
+
+/* 显示方式切换（框 / 中心点） */
+.seg { display: inline-flex; border: 1px solid #dadce0; border-radius: 8px; overflow: hidden; }
+.seg-btn {
+  border: none;
+  background: #fff;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #5f6368;
+  cursor: pointer;
+}
+.seg-btn + .seg-btn { border-left: 1px solid #dadce0; }
+.seg-btn:hover { background: #f1f3f4; }
+.seg-btn.active { background: #1a73e8; color: #fff; }
+.seg-btn.active:hover { background: #1a73e8; }
+
+/* 标注图形：类别色由 JS 写到父节点的 --c 变量上，边框/圆点/标签底色都取它 */
+.bbox {
+  position: absolute;
+  border: 1.5px solid var(--c);
+  border-radius: 2px;
+  box-sizing: border-box;
+}
+.bbox .tag {
+  position: absolute;
+  left: -1.5px;
+  top: -1.5px;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 4px;
+  color: #fff;
+  white-space: nowrap;
+  border-radius: 2px 0 3px 0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .45);
+  background: var(--c);
+  /* 统一规则：标签默认不显示，鼠标移到这个框上（或对应表格行）才出现 */
+  display: none;
+}
+.bbox:hover .tag,
+.bbox.hl .tag { display: block; }
+.bbox.hl {
+  border-width: 3px;
+  z-index: 3;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .9);
+}
+/* 实心框：完全不透明填充（--c-soft）+ 实线边框，hover 高亮时再加深 */
+.bbox.fill {
+  background: var(--c-soft, #1a73e8);
+}
+.bbox.fill:hover,
+.bbox.fill.hl {
+  background: var(--c-soft, #1557b0);
+}
+/* 幽灵框：中心点模式下 hover 那个点才浮现，用来看清它的实际范围 */
+.bbox.ghost {
+  border-style: dashed;
+  pointer-events: none;
+  display: none;
+}
+.bbox.ghost.show { display: block; }
+
+/* 中心点模式：只画一个点，hover（或表格行 hover）才出标签 */
+.dot {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;   /* 让 (cx,cy) 正好落在容器中心 */
+  cursor: crosshair;
+  z-index: 1;               /* 盖在幽灵框之上 */
+}
+.dot > i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: var(--c);
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 4px rgba(0, 0, 0, .55);
+}
+.dot .tag {
+  position: absolute;
+  left: 17px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  font-size: 10px;
+  line-height: 16px;
+  padding: 0 4px;
+  color: #fff;
+  white-space: nowrap;
+  border-radius: 3px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .45);
+  background: var(--c);
+  display: none;
+}
+.dot:hover .tag,
+.dot.hl .tag { display: block; }
+.dot:hover > i,
+.dot.hl > i {
+  width: 13px;
+  height: 13px;
+  margin: -6.5px 0 0 -6.5px;
+  border-width: 2px;
+}
+.dot.hl { z-index: 3; }
+
+/* 勾选「常显标签」后所有标签都显示 */
+.viewer.always-tags .tag { display: block; }
+
+.viewer-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: #80868b;
+}
+.viewer-foot a { color: #1a73e8; text-decoration: none; }
+.viewer-foot a:hover { text-decoration: underline; }
+
+.det-table-wrap { max-height: 170px; overflow: auto; margin-top: 6px; }
+.det-table-wrap [data-role="tablebody"] tr.hl { background: #e8f0fe; }
+.empty-inline { font-size: 12px; color: #9aa0a6; }
+.result-box table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+.result-box th, .result-box td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid #eceff1;
+}
+.result-box th { color: #80868b; font-weight: 500; }
+.result-box .summary { color: #137333; font-weight: 600; margin-bottom: 6px; }

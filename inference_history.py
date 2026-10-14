@@ -88,7 +88,9 @@ def complete_record(record_id: str, src: Path, result: dict, parameters: dict, *
     original_alpha = image.getchannel("A")
     draw = ImageDraw.Draw(image)
     for det in record["detections"]:
-        color = "#ff9900" if merge and det.get("origin_record_id") == merge["incoming_id"] else "#00bb66"
+        incoming = (merge and det.get("origin_record_id") == merge["incoming_id"]) or (
+            record.get("fusion") and det.get("source_model") == record["fusion"]["incoming_weight"])
+        color = "#ff9900" if incoming else "#00bb66"
         draw.rectangle(det["bbox"], outline=color, width=2)
     image.putalpha(original_alpha)
     image.save(directory / "result.png")
@@ -102,7 +104,7 @@ def complete_record(record_id: str, src: Path, result: dict, parameters: dict, *
 def list_records() -> list[dict]:
     fields = ("record_id", "created_at", "kind", "source", "input_sha256", "weight", "mode",
               "model_name", "count", "head_count", "person_count", "head_count_only", "imgsz",
-              "source_url", "result_url", "parameters", "merge", "elapsed_seconds")
+              "source_url", "result_url", "parameters", "merge", "fusion", "elapsed_seconds")
     records = []
     for path in HISTORY_DIR.glob("*/record.json"):
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -116,6 +118,12 @@ def overlaps(a: list, b: list) -> bool:
     return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
 
 
+def merge_detections(base: list[dict], incoming: list[dict]) -> tuple[list[dict], int, int]:
+    """Keep every baseline box; add only incoming boxes with zero overlap."""
+    added = [det for det in incoming if not any(overlaps(det["bbox"], kept["bbox"]) for kept in base)]
+    return copy.deepcopy(base + added), len(added), len(incoming) - len(added)
+
+
 def merge_records(base_id: str, incoming_id: str) -> dict:
     if base_id == incoming_id:
         raise ValueError("请选择两条不同的推理记录")
@@ -125,15 +133,10 @@ def merge_records(base_id: str, incoming_id: str) -> dict:
     base_dets = copy.deepcopy(base["detections"])
     for det in base_dets:
         det["origin_record_id"] = base_id
-    added, discarded = [], 0
-    for det in incoming["detections"]:
-        if any(overlaps(det["bbox"], kept["bbox"]) for kept in base_dets):
-            discarded += 1
-            continue
-        det = copy.deepcopy(det)
+    incoming_dets = copy.deepcopy(incoming["detections"])
+    for det in incoming_dets:
         det["origin_record_id"] = incoming_id
-        added.append(det)
-    detections = base_dets + added
+    detections, added_count, discarded = merge_detections(base_dets, incoming_dets)
     summary = {}
     for det in detections:
         name = det["class_name"]
@@ -150,5 +153,5 @@ def merge_records(base_id: str, incoming_id: str) -> dict:
     record_id, snapshot = begin_record(source_path(base))
     return complete_record(record_id, snapshot, result, {"base": base["parameters"], "incoming": incoming["parameters"]},
                            kind="merge", merge={"base_id": base_id, "incoming_id": incoming_id,
-                                                "discarded_overlaps": discarded, "added_count": len(added),
+                                                "discarded_overlaps": discarded, "added_count": added_count,
                                                 "rule": "any_positive_overlap_keep_base"})
