@@ -54,7 +54,7 @@
       <span id="detPoseOptions" hidden>
         <label>低头 R &lt; <input id="detHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="detHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
         <label>抬头 R &gt; <input id="detHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="detHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
-        <label><input id="detPoseRoi" type="checkbox" checked>全图物体检测与关联</label>
+        <label><input id="detPoseRoi" type="checkbox" checked>全图物体检测与关联（Pose框）</label>
         <label>物体置信度 ≥ <input id="detRoiConfidence" type="number" min="0" max="1" step="0.05" value="0.6"></label>
         <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
       </span>
@@ -142,7 +142,7 @@
       <span id="vidPoseOptions" hidden>
         <label>低头 R &lt; <input id="vidHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="vidHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
         <label>抬头 R &gt; <input id="vidHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="vidHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
-        <label><input id="vidPoseRoi" type="checkbox" checked>全图物体检测与关联</label>
+        <label><input id="vidPoseRoi" type="checkbox" checked>全图物体检测与关联（Pose框）</label>
         <label>物体置信度 ≥ <input id="vidRoiConfidence" type="number" min="0" max="1" step="0.05" value="0.6"></label>
         <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
       </span>
@@ -258,7 +258,7 @@
           <span id="annPoseOptions" hidden>
             <label>低头 R &lt; <input id="annHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="annHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
             <label>抬头 R &gt; <input id="annHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="annHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
-            <label><input id="annPoseRoi" type="checkbox" checked>全图物体检测与关联</label>
+            <label><input id="annPoseRoi" type="checkbox" checked>全图物体检测与关联（Pose框）</label>
             <label>物体置信度 ≥ <input id="annRoiConfidence" type="number" min="0" max="1" step="0.05" value="0.6"></label>
             <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
           </span>

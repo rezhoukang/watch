@@ -399,8 +399,9 @@ def _annotate_frame(
 
     height, width = frame.shape[:2]
     poses = pose_support.serialize_keypoints(r)
-    pose_detections = [{"keypoints": points, "behavior": pose_behaviors.classify(
-        points, width, height, head_down_r_threshold, head_up_r_threshold)} for points in poses]
+    pose_detections = [{"bbox": [float(v) for v in box.xyxy[0].tolist()], "keypoints": points,
+                        "behavior": pose_behaviors.classify(points, width, height, head_down_r_threshold, head_up_r_threshold)}
+                       for points, box in zip(poses, r.boxes)]
     roi_module.refine(frame, pose_detections, pose_roi, roi_confidence, device_arg())
 
     # 类别颜色与模型一致（按 class_id 取色）
@@ -645,7 +646,7 @@ def _run_video_job(
         # 点模式在文件名上标记，避免和框模式互相覆盖
         render_tag = (("_head_rtdetrbase" if rtdetr_base else "_head") if head_detection else "_rtdetrv4" if standalone_rtdetr else "") + ("" if render == "box" else "_dot")
         if not head_detection and getattr(model, "task", None) == "pose":
-            render_tag += f"_pose_down{head_down_r_threshold:g}_up{head_up_r_threshold:g}" + (f"_objectsmax{roi_confidence:g}" if pose_roi else "_noroi")
+            render_tag += f"_pose_down{head_down_r_threshold:g}_up{head_up_r_threshold:g}" + (f"_poseboxmax{roi_confidence:g}" if pose_roi else "_noroi")
         if head_detection and merge_iou > 0:
             render_tag += f"_iou{merge_iou:g}"
             if merge_confidence > 0:
