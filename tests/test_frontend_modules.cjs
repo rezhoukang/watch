@@ -29,7 +29,7 @@ class Element {
 const root = path.resolve(__dirname, '../frontend');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1], new Element()]));
-const tabs = ['detect', 'headcut', 'video', 'train', 'dataset'].map((name) => {
+const tabs = ['detect', 'headcut', 'video', 'train', 'dataset', 'aggregate'].map((name) => {
   const tab = new Element(); tab.dataset.tab = name; return tab;
 });
 const subtabs = ['images', 'result', 'history'].map((name) => {
@@ -43,7 +43,7 @@ const responses = {
   '/api/head-cuts': { runs: [] },
 };
 const context = vm.createContext({
-  console, setTimeout, clearTimeout, AbortController, URLSearchParams,
+  console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, URLSearchParams,
   window: { addEventListener() {}, scrollTo() {} },
   document: {
     getElementById: (id) => nodes.get(id) || null,
@@ -76,7 +76,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     assert(match[1].endsWith(`?v=${styleVersion}`), `Stylesheet has stale asset version: ${match[1]}`);
   }
   await entry.evaluate(); await flush();
-  assert.equal(modules.size, 15);
+  assert.equal(modules.size, 16);
   assert(calls.includes('/api/yolo/status'));
   assert(calls.includes('/api/images'));
   assert(calls.includes('/api/videos'));
@@ -365,6 +365,60 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(viewer.querySelector('[data-role="tablebody"]').children.some(row => row.innerHTML.includes('疑似阅读')));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
+  // 聚合操作：点图片 → 目标检测 / 人脸识别（姓名贴到目标） / 姿势检测与绑定
+  let aggregatePayload;
+  const aggregateUrl = `/api/aggregate/image/${encodeURIComponent('课堂A.png')}`;
+  responses[aggregateUrl] = options => {
+    aggregatePayload = JSON.parse(options.body);
+    return {
+      source: '课堂A.png', result: '课堂A_agg.png', result_url: '/api/aggregate/results/%E8%AF%BE%E5%A0%82A_agg.png',
+      count: 1, elapsed_seconds: 4.2,
+      steps: {
+        detect: { enabled: true, weight: 'medium.pt', confidence: 0.38, count: 1, elapsed_seconds: 1.1 },
+        face: { enabled: true, face_count: 1, matched: 1, threshold: 0.4, library_count: 155, elapsed_seconds: 1.6 },
+        pose: { enabled: true, count: 1, bound: 1, strategy: 'iou', iou_threshold: 0.3, elapsed_seconds: 1.5 },
+      },
+      bind: { strategy: 'iou', rule: '姿势框与目标框的 IoU 最大，且 ≥ 绑定 IoU', face_tolerance: 0.5 },
+      summary: { targets: 1, named_targets: 1, faces: 1, matched_faces: 1, unknown_faces: 0, rejected_faces: 0, poses: 1, bound_poses: 1 },
+      unbound_faces: [], unbound_poses: [],
+      targets: [{ class_name: 'person', confidence: 0.91, bbox: [10, 10, 90, 200], name: '张三', entry_id: '0001', similarity: 0.62,
+        face_id: 'F01', poses: [{ behavior: { state: '低头' }, bind: { iou: 0.72, strategy: 'iou' } }] }],
+    };
+  };
+  assert.equal(calls.includes(aggregateUrl), false);
+  await modules.get(path.join(root, 'js/aggregate.js')).namespace.loadAggregate();
+  await flush();
+  assert.equal(nodes.get('aggImageGrid').children.length, 1);
+  nodes.get('aggFaceRecognition').checked = true;
+  nodes.get('aggPose').checked = true;
+  await nodes.get('aggImageGrid').children[0].events.click();
+  await flush();
+  assert.deepEqual(aggregatePayload, {
+    weights: 'test.pt', confidence: 0.38, imgsz: 640, classes: '', face: true, pose: true,
+    threshold: 0.4, face_confidence: 0.5, pose_confidence: 0.6, bind: 'iou', bind_iou: 0.3,
+  });
+  assert(nodes.get('aggStatus').textContent.includes('贴姓名 1 个'));
+  const aggBox = nodes.get('aggResult');
+  assert(aggBox.innerHTML.includes('/api/aggregate/results/'), '结果图应指向聚合结果接口');
+  assert(aggBox.innerHTML.includes('张三') && aggBox.innerHTML.includes('agg-name'), '姓名和相似度要写进明细表');
+  assert(aggBox.innerHTML.includes('低头'), '绑定上的姿势要写进明细表');
+  assert(aggBox.innerHTML.includes('agg-step') && aggBox.innerHTML.includes('目标检测'), '三步耗时统计要显示出来');
+  // 勾掉两步后只跑目标检测，参数随勾选变化
+  nodes.get('aggFaceRecognition').checked = false;
+  nodes.get('aggPose').checked = false;
+  nodes.get('aggBind').value = 'contain';
+  nodes.get('aggRecThreshold').value = '0.35';
+  nodes.get('aggPoseConfidence').value = '';
+  await nodes.get('aggImageGrid').children[0].events.click();
+  await flush();
+  assert.equal(aggregatePayload.face, false);
+  assert.equal(aggregatePayload.pose, false);
+  assert.equal(aggregatePayload.bind, 'contain');
+  assert.equal(aggregatePayload.threshold, 0.35);
+  nodes.get('aggRecThreshold').value = '2';
+  await nodes.get('aggImageGrid').children[0].events.click();
+  await flush();
+  assert(aggBox.innerHTML.includes('识别阈值必须在 0 到 1 之间'), '参数越界要报错而不是静默失败');
   assert.equal(nodes.has('globalBanner'), false);
-  console.log('ES module startup, navigation and result viewer checks passed (15 modules, real HTML IDs).');
+  console.log('ES module startup, navigation and result viewer checks passed (16 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

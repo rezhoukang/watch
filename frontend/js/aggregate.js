@@ -25,7 +25,7 @@ function readAggregateOptions() {
     weights, confidence, imgsz, classes: el('aggClasses').value.trim(),
     face: !!el('aggFaceRecognition').checked, pose: !!el('aggPose').checked,
     threshold, face_confidence: faceConfidence, pose_confidence: poseConfidence,
-    bind: el('aggBind').value, bind_iou: bindIou,
+    bind: el('aggBind').value || 'iou', bind_iou: bindIou,
   };
 }
 
@@ -117,7 +117,7 @@ async function loadAggregate() {
   const grid = el('aggImageGrid');
   try {
     const data = await api('/api/images');
-    hidePreview();
+    hideHoverPreview();
     if (!data.images.length) {
       grid.innerHTML = '<div class="empty">暂无待推理图片，请先在「上传」页上传</div>';
       return;
@@ -128,7 +128,7 @@ async function loadAggregate() {
       figure.title = `点击聚合：${image.filename}`;
       figure.innerHTML = `<img src="${esc(image.url)}" alt="" loading="lazy"><figcaption>${esc(image.filename)}</figcaption>`;
       bindImageHover(figure, () => ({ src: image.url, name: image.filename }));
-      figure.addEventListener('click', () => { hidePreview(); aggregateImage(image.filename); });
+      figure.addEventListener('click', () => { hideHoverPreview(); aggregateImage(image.filename); });
       grid.appendChild(figure);
     }
   } catch (error) {
