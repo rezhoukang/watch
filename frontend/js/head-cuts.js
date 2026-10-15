@@ -1,5 +1,5 @@
-import { el, esc, api, showError } from './core.js?v=80';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=80';
+import { el, esc, api, showError } from './core.js?v=81';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=81';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;
@@ -153,7 +153,7 @@ async function pollBatch(runId, version) {
     }
   } catch (error) {
     if (activeJob === runId) activeJob = null;
-    syncSelection(); showError(el('cutProgress'), error, '读取头切割进度失败');
+    syncSelection(); showError(el('cutProgress'), error, '读取人脸检测进度失败');
   }
 }
 
@@ -270,7 +270,7 @@ async function loadHeadCuts() {
   try {
     await loadCutImages();
     await loadBatches();
-  } catch (error) { showError(el('cutProgress'), error, '加载头切割失败'); }
+  } catch (error) { showError(el('cutProgress'), error, '加载人脸检测失败'); }
 }
 
 el('cutRefresh').addEventListener('click', loadHeadCuts);
@@ -335,7 +335,7 @@ el('cutInfer').addEventListener('click', async () => {
     if ([mergeIou, mergeConfidence].some(v => !Number.isFinite(v) || v < 0 || v > 1)) throw new Error('IoU 和置信度门槛必须在0到1之间');
     const result = await api('/api/head-cuts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filenames: [...selected], rtdetr_base: !!el('cutRtdetrBase').checked, merge_iou: mergeIou, merge_confidence: mergeConfidence }) });
     activeJob = result.run_id; syncSelection(); await loadBatches(result.run_id);
-  } catch (error) { showError(el('cutProgress'), error, '头切割失败'); syncSelection(); }
+  } catch (error) { showError(el('cutProgress'), error, '人脸检测失败'); syncSelection(); }
 });
 
 export { loadHeadCuts };

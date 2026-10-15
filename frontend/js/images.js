@@ -1,9 +1,9 @@
-import { el, esc, api, banner, showError } from './core.js?v=80';
-import { readDetectOptions } from './models.js?v=80';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=80';
-import { switchSubPane } from './navigation.js?v=80';
-import { renderDetectResult } from './viewer.js?v=80';
-import { importBehaviorRecords } from './annotator.js?v=80';
+import { el, esc, api, banner, showError } from './core.js?v=81';
+import { readDetectOptions } from './models.js?v=81';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=81';
+import { switchSubPane } from './navigation.js?v=81';
+import { renderDetectResult } from './viewer.js?v=81';
+import { importBehaviorRecords } from './annotator.js?v=81';
 
 /* ==================== 图片推理 ==================== */
 
