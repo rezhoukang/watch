@@ -45,6 +45,28 @@ def read_run(run_id: str) -> dict:
         marks = json.loads((folder/'marks.json').read_text(encoding='utf-8')) if (folder/'marks.json').is_file() else {}
         for item in record['crops']:
             item['mark'] = marks.get(item['crop_id'], '')
+        face_path = folder/'face_detection.json'
+        if face_path.is_file():
+            faces = json.loads(face_path.read_text(encoding='utf-8'))
+            if faces['status'] in ('running', 'queued') and faces['job_id'] not in vision.JOBS:
+                faces.update(status='interrupted', message='服务重启，人脸检测中断；已完成结果保留，可重新检测')
+            record['face_detection'] = {k: v for k, v in faces.items() if k != 'results'}
+            for item in record['crops']:
+                item['face_detection'] = faces['results'].get(item['crop_id'], {'status': 'pending', 'faces': [], 'face_count': 0})
+        recognition_path = folder/'recognition.json'
+        if recognition_path.is_file():
+            recognized = json.loads(recognition_path.read_text(encoding='utf-8'))
+            if recognized['status'] in ('running', 'queued') and recognized['job_id'] not in vision.JOBS:
+                recognized.update(status='interrupted', message='服务重启，识别中断；已完成结果保留，可重新识别')
+            record['recognition'] = {k: v for k, v in recognized.items() if k != 'results'}
+            for item in record['crops']:
+                per_crop = recognized['results'].get(item['crop_id'], {'status': 'pending'})
+                names = []
+                for face in per_crop.get('faces', []):
+                    first = (face.get('faces') or [{}])[0]
+                    if first.get('status') == 'matched' and first.get('match', {}).get('name'):
+                        names.append(first['match']['name'])
+                item['recognition'] = dict(per_crop, name='、'.join(names))
         return record
 
 
@@ -177,11 +199,11 @@ def _run_batch(run_id: str) -> None:
 def build_archive(run_id: str) -> Path:
     with _lock:
         record = read_run(run_id)
-        if record['status'] in ('running', 'queued'):
+        if record['status'] in ('running', 'queued') or record.get('face_detection', {}).get('status') in ('running', 'queued'):
             raise ValueError('请等待批次完成后再下载')
         folder = run_dir(run_id)
         archive = HEAD_CUT_DIR/f'{run_id}.zip'
-        newest = max(p.stat().st_mtime_ns for p in (folder/'manifest.json', folder/'marks.json') if p.is_file())
+        newest = max(p.stat().st_mtime_ns for p in (folder/'manifest.json', folder/'marks.json', folder/'face_detection.json') if p.is_file())
         if archive.is_file() and archive.stat().st_mtime_ns >= newest:
             return archive
         temporary = archive.with_suffix('.zip.tmp')

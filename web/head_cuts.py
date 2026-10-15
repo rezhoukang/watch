@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import head_cuts
+import head_cut_faces
 from project_paths import IMAGE_EXTENSIONS
 from . import common
 
@@ -15,6 +16,10 @@ class BatchRequest(BaseModel):
     rtdetr_base: bool = False
     merge_iou: float = Field(default=.1, ge=0, le=1)
     merge_confidence: float = Field(default=.55, ge=0, le=1)
+
+
+class FaceRequest(BaseModel):
+    confidence: float = Field(default=.5, ge=.01, le=.99)
 
 
 @router.post('/api/head-cuts')
@@ -50,6 +55,16 @@ def save_marks(run_id: str, payload: dict) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {'ok': True}
+
+
+@router.post('/api/head-cuts/{run_id}/faces')
+def detect_faces(run_id: str, payload: FaceRequest) -> dict:
+    get_batch(run_id)
+    try:
+        job_id = head_cut_faces.start_detection(run_id, payload.confidence)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {'job_id': job_id, 'run_id': run_id}
 
 
 @router.get('/api/head-cuts/{run_id}/download')

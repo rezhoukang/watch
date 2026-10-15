@@ -1,6 +1,6 @@
-import { el, api } from './core.js?v=71';
-import { loadImages } from './images.js?v=71';
-import { loadVideos } from './video.js?v=71';
+import { el, api } from './core.js?v=72';
+import { loadImages } from './images.js?v=72';
+import { loadVideos } from './video.js?v=72';
 
 /* ==================== 上传（图片 / 视频）==================== */
 

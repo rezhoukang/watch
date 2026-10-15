@@ -107,9 +107,26 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(cutPayload, { filenames: ['课堂A.png'], rtdetr_base: false, merge_iou: .1, merge_confidence: .55 });
   assert.equal(nodes.get('cutHeadGrid').children.length, 1);
   assert(nodes.get('cutHeadGrid').children[0].innerHTML.includes('HC001-001'));
-  const markInput = nodes.get('cutHeadGrid').children[0].children[0].children[0];
+  const markInput = nodes.get('cutHeadGrid').children[0].children.at(-1).children[0];
   markInput.value = '已核对'; await markInput.events.change();
   assert.deepEqual(markPayload, { marks: { 'HC001-001': '已核对' } });
+  let facePayload;
+  responses[`/api/head-cuts/${cutRunId}/faces`] = options => {
+    facePayload = JSON.parse(options.body);
+    const record = responses[`/api/head-cuts/${cutRunId}`];
+    record.face_detection = { job_id: 'face-job', status: 'done', progress: 1, total: 1, config: { confidence: .5 }, message: '人脸检测完成' };
+    record.crops[0].face_detection = { status: 'detected', face_count: 1, annotated_file: 'face_annotations/HC001-001.png',
+      faces: [{ face_id: 'HC001-001_F01', confidence: .8, file: 'faces/HC001-001_F01.png' }] };
+    return { job_id: 'face-job', run_id: cutRunId };
+  };
+  await nodes.get('cutDetectFaces').events.click();
+  assert.deepEqual(facePayload, { confidence: .5 });
+  assert(nodes.get('cutFaceProgress').textContent.includes('人脸检测完成'));
+  assert(nodes.get('cutHeadGrid').children[0].children.some(node => node.innerHTML.includes('HC001-001_F01')));
+  nodes.get('cutFaceFilter').value = 'no_face'; nodes.get('cutFaceFilter').events.change();
+  assert.equal(nodes.get('cutHeadGrid').children.length, 0);
+  nodes.get('cutFaceFilter').value = ''; nodes.get('cutFaceFilter').events.change();
+  assert.equal(nodes.get('cutHeadGrid').children.length, 1);
   assert.equal(nodes.get('envStatus').className, 'badge ok');
   responses['/test-chart.json'] = { head_counts: [[100, 2], [150, 8], [200, 5]], fps: 25, start_frame: 100 };
   const player = nodes.get('videoResult').querySelector('video');
