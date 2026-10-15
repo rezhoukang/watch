@@ -29,6 +29,15 @@ STUDENTS_PDF_DIR = BASE_DIR / "output" / "pdf" / "2026_software_students"
 # 余弦相似度匹配：低于该阈值视为“未登记/不识别”（点名宁可漏不可错）。
 DEFAULT_MATCH_THRESHOLD = 0.40
 
+# 识别查询端的质量门槛默认值（均可调，不再是硬编码）。
+# min_confidence 取 SCRFD 检出阈值 0.5：检测已按该阈值筛过，再要求更高置信度等于重复设卡；
+# 实测 A/B 教室远景小脸的 SCRFD 置信度中位 0.58、最高仅 0.774，卡 0.8 会让全部人脸进不了比对。
+DEFAULT_QUALITY_CONFIDENCE = 0.5
+DEFAULT_MIN_FACE_PIXELS = 24
+DEFAULT_MIN_SHARPNESS = 50
+# 识别端 SCRFD 检出阈值（与 DEFAULT_QUALITY_CONFIDENCE 保持同源）
+DETECT_CONFIDENCE = 0.5
+
 _lock = threading.RLock()
 _session = None
 _detector = None
@@ -66,6 +75,9 @@ def status() -> dict:
             "detector": {"available": MODEL_PATH.is_file(), "name": "SCRFD-10G", "sha256": MODEL_SHA256},
             "library_count": len(_load_entries()),
             "threshold": DEFAULT_MATCH_THRESHOLD,
+            "quality": {"min_confidence": DEFAULT_QUALITY_CONFIDENCE,
+                        "min_size": DEFAULT_MIN_FACE_PIXELS,
+                        "min_sharpness": DEFAULT_MIN_SHARPNESS},
         }
 
 
@@ -83,7 +95,8 @@ def extract_embedding(face_image, landmarks) -> np.ndarray:
     blob = blob.transpose(2, 0, 1)[None, ...]
     session = _get_session()
     output_name = session.get_outputs()[0].name
-    embedding = session.run([output_name], {"input.1": blob})[0][0]
+    outputs = session.run([output_name], {"input.1": blob})
+    embedding = np.asarray(outputs[0], dtype=np.float32)[0]
     norm = float(np.linalg.norm(embedding))
     if norm < 1e-9:
         raise ValueError("特征向量模长异常")
@@ -314,17 +327,25 @@ def import_students(progress=None) -> dict:
 
 # ---------------------------------------------------------------- 识别一个人脸裁剪
 
-def recognize_face_image(image: np.ndarray, threshold: float = DEFAULT_MATCH_THRESHOLD) -> dict:
-    """对一张人脸图做 1:N 识别。image 为 BGR；内部自动检测+对齐+提特征+比对。"""
+def recognize_face_image(image: np.ndarray, threshold: float = DEFAULT_MATCH_THRESHOLD,
+                         min_confidence: float = DEFAULT_QUALITY_CONFIDENCE,
+                         min_size: int = DEFAULT_MIN_FACE_PIXELS,
+                         min_sharpness: float = DEFAULT_MIN_SHARPNESS) -> dict:
+    """对一张人脸图做 1:N 识别。image 为 BGR；内部自动检测+对齐+提特征+比对。
+
+    质量门槛全部可调：min_confidence / min_size / min_sharpness。
+    """
     image = _to_bgr(image)
     detector = _get_detector()
-    faces = detector.detect(image, threshold=0.5)
+    faces = detector.detect(image, threshold=DETECT_CONFIDENCE)
     if not faces:
         return {"status": "no_face", "face_count": 0, "matches": []}
     faces.sort(key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]), reverse=True)
     results = []
     for face in faces[:5]:
-        reasons, _quality = assess_quality(image, face)
+        reasons, _quality = assess_quality(image, face, min_size=min_size,
+                                           min_sharpness=min_sharpness,
+                                           min_confidence=min_confidence)
         if reasons:
             results.append({"status": "rejected", "reasons": reasons, "matches": []})
             continue

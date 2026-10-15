@@ -127,6 +127,45 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(nodes.get('cutHeadGrid').children.length, 0);
   nodes.get('cutFaceFilter').value = ''; nodes.get('cutFaceFilter').events.change();
   assert.equal(nodes.get('cutHeadGrid').children.length, 1);
+  // 1:N 识别：命中显示姓名与相似度，质量不足与未识别分别给出可追溯的徽标
+  assert.equal(nodes.get('cutRecognizeFaces').disabled, false, '检出人脸后应可识别');
+  let recPayload;
+  responses[`/api/head-cuts/${cutRunId}/recognize`] = options => {
+    recPayload = JSON.parse(options.body);
+    const record = responses[`/api/head-cuts/${cutRunId}`];
+    record.recognition = { job_id: 'rec-job', status: 'done', progress: 1, total: 1, config: { threshold: .4 }, message: '识别完成' };
+    record.crops[0].recognition = { crop_id: 'HC001-001', status: 'done', name: '张三',
+      faces: [{ face_id: 'HC001-001_F01', status: 'matched', face_pixels: 26,
+        match: { matched: true, entry_id: '0001', name: '张三', similarity: .95 } }] };
+    return { job_id: 'rec-job', run_id: cutRunId };
+  };
+  await nodes.get('cutRecognizeFaces').events.click();
+  assert.deepEqual(recPayload, { threshold: .4, min_confidence: .5, min_size: 24 });
+  // 质量门槛可调：不再硬编码 0.8，界面改值后原样提交
+  nodes.get('cutRecThreshold').value = '0.35';
+  nodes.get('cutRecConfidence').value = '0.55';
+  nodes.get('cutRecSize').value = '12';
+  await nodes.get('cutRecognizeFaces').events.click();
+  assert.deepEqual(recPayload, { threshold: .35, min_confidence: .55, min_size: 12 });
+  nodes.get('cutRecThreshold').value = '0.4';
+  nodes.get('cutRecConfidence').value = '0.5';
+  nodes.get('cutRecSize').value = '24';
+  assert(nodes.get('cutFaceProgress').textContent.includes('识别完成'));
+  const recFigure = nodes.get('cutHeadGrid').children[0];
+  assert(recFigure.children.some(node => node.innerHTML.includes('rec-hit') && node.innerHTML.includes('张三')));
+  nodes.get('cutRecFilter').value = 'matched'; nodes.get('cutRecFilter').events.change();
+  assert.equal(nodes.get('cutHeadGrid').children.length, 1);
+  nodes.get('cutRecFilter').value = 'unknown'; nodes.get('cutRecFilter').events.change();
+  assert.equal(nodes.get('cutHeadGrid').children.length, 0, '未识别筛选应排除已命中的裁剪');
+  // 质量不足：展示原因，且不计为已识别
+  responses[`/api/head-cuts/${cutRunId}`].crops[0].recognition = { crop_id: 'HC001-001', status: 'done', name: '',
+    faces: [{ face_id: 'HC001-001_F01', status: 'rejected', face_pixels: 12, reasons: ['原始人脸尺寸过小'], faces: [] }] };
+  await modules.get(path.join(root, 'js/head-cuts.js')).namespace.loadHeadCuts();
+  await flush();
+  nodes.get('cutRecFilter').value = 'unknown'; nodes.get('cutRecFilter').events.change();
+  assert.equal(nodes.get('cutHeadGrid').children.length, 1, '未识别筛选应包含质量不足的裁剪');
+  assert(nodes.get('cutHeadGrid').children[0].children.some(node => node.innerHTML.includes('rec-skip')));
+  nodes.get('cutRecFilter').value = ''; nodes.get('cutRecFilter').events.change();
   assert.equal(nodes.get('envStatus').className, 'badge ok');
   responses['/test-chart.json'] = { head_counts: [[100, 2], [150, 8], [200, 5]], fps: 25, start_frame: 100 };
   const player = nodes.get('videoResult').querySelector('video');

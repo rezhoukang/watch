@@ -33,6 +33,10 @@ class HeadCutFaceTests(unittest.TestCase):
         with patch.object(head_cuts.head_fusion, 'detect_image', return_value=prediction):
             head_cuts._run_batch(self.run_id)
         self.client = TestClient(app.app)
+        # TestClient 的 blocking portal 在首次请求时才创建线程；若该请求恰好发生在
+        # threading.Thread 被 mock 的窗口内（start_faces 会这么做），portal 线程无法启动，
+        # 请求会永久阻塞。这里先发一个廉价请求预热 portal。
+        self.client.get('/api/__portal_warmup__')
 
     def start_faces(self):
         with patch.object(head_cut_faces.threading, 'Thread'):

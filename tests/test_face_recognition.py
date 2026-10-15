@@ -65,6 +65,7 @@ class RecognitionTaskTests(unittest.TestCase):
         for module, field, value in (
             (head_cuts, 'HEAD_CUT_DIR', self.root / 'output'),
             (head_cut_faces, 'MODEL_PATH', model),
+            (face_recognition, 'MODEL_PATH_RECOGNITION', model),
             (face_recognition, 'LIBRARY_DIR', self.root / 'face_library'),
             (face_recognition, 'LIBRARY_JSON', self.root / 'face_library' / 'library.json'),
             (face_recognition, 'LIBRARY_NPZ', self.root / 'face_library' / 'embeddings.npz'),
@@ -81,6 +82,9 @@ class RecognitionTaskTests(unittest.TestCase):
         with patch.object(head_cuts.head_fusion, 'detect_image', return_value=prediction):
             head_cuts._run_batch(self.run_id)
         self.client = TestClient(app.app)
+        # TestClient 的 blocking portal 在首次请求时才创建线程；识别接口的首次请求发生在
+        # threading.Thread 被 mock 的窗口内，不预热会永久阻塞。
+        self.client.get('/api/__portal_warmup__')
 
     def _seed_faces(self):
         """为批次注入一条已检出的 faces 结果（含 landmarks），并 mock 识别模型。"""
@@ -131,7 +135,8 @@ class RecognitionTaskTests(unittest.TestCase):
         self.addCleanup(vision.JOBS.pop, job_id, None)
         # 直接跑后台任务
         batch = head_cuts.read_run(self.run_id)
-        crops = [{'crop_id': 'HC001-001', 'faces': batch['crops'][0]['face_detection']['faces']}]
+        crops = [{'crop_id': 'HC001-001', 'raw_file': batch['crops'][0]['raw_file'],
+                  'faces': batch['crops'][0]['face_detection']['faces']}]
         record = json.loads((head_cuts.run_dir(self.run_id) / 'recognition.json').read_text(encoding='utf-8'))
         head_cut_faces._run_recognition(self.run_id, job_id, crops, record, 0.4)
         # 验证结果写入
@@ -139,6 +144,92 @@ class RecognitionTaskTests(unittest.TestCase):
         self.assertEqual(rec['status'], 'done')
         self.assertEqual(rec['matched'], 1)
         self.assertEqual(rec['results']['HC001-001']['faces'][0]['match']['name'], '张三')
+
+    def test_recognize_reads_hc_crop_not_face_crop(self):
+        """识别的 bbox/landmarks 相对 HC 裁剪图，必须用 HC 裁剪图做质量筛选与对齐。
+
+        若错用人脸小图（faces/…png），坐标系不一致会导致取样区域和对齐均错位。
+        """
+        self._seed_faces()
+        import numpy as np
+        face_recognition.list_entries = Mock(return_value=[{'id': '0001', 'name': '张三'}])
+        seen = {}
+        face_recognition.assess_quality = Mock(
+            side_effect=lambda image, face, **kwargs: (seen.setdefault('quality', image.shape), ([], {'sharpness': 100}))[1])
+        face_recognition.extract_embedding = Mock(
+            side_effect=lambda image, landmarks: (seen.setdefault('embed', (image.shape, landmarks)),
+                                                  np.ones(512, dtype=np.float32) / np.sqrt(512))[1])
+        face_recognition.match = Mock(return_value={
+            'matched': True, 'entry_id': '0001', 'name': '张三', 'similarity': 0.95})
+        face_recognition.match_top_k = Mock(return_value=[])
+        with patch.object(head_cut_faces.threading, 'Thread'):
+            response = self.client.post(f'/api/head-cuts/{self.run_id}/recognize', json={'threshold': .4})
+        self.assertEqual(response.status_code, 200, response.text)
+        job_id = response.json()['job_id']
+        self.addCleanup(vision.JOBS.pop, job_id, None)
+        batch = head_cuts.read_run(self.run_id)
+        crops = [{'crop_id': 'HC001-001', 'raw_file': batch['crops'][0]['raw_file'],
+                  'faces': batch['crops'][0]['face_detection']['faces']}]
+        record = json.loads((head_cuts.run_dir(self.run_id) / 'recognition.json').read_text(encoding='utf-8'))
+        head_cut_faces._run_recognition(self.run_id, job_id, crops, record, 0.4)
+        # HC 裁剪图为 21x29（prediction bbox [0,2,21,31]）；人脸小图为 10x13
+        self.assertEqual(seen['quality'], (29, 21, 3))
+        self.assertEqual(seen['embed'][0], (29, 21, 3))
+        # landmarks 应保持 HC 坐标系原值，未被平移
+        self.assertEqual(seen['embed'][1], [[3, 5], [8, 5], [5, 9], [4, 11], [7, 11]])
+        rec = json.loads((head_cuts.run_dir(self.run_id) / 'recognition.json').read_text(encoding='utf-8'))
+        self.assertEqual(rec['results']['HC001-001']['faces'][0]['face_pixels'], 10)
+
+    def test_recognize_records_configurable_quality_gates(self):
+        """质量门槛可调：不再硬编码 0.8，且写入记录 config 以便追溯。"""
+        self._seed_faces()
+        face_recognition.list_entries = Mock(return_value=[{'id': '0001', 'name': '张三'}])
+        payload = {'threshold': .35, 'min_confidence': .55, 'min_size': 12, 'min_sharpness': 0}
+        with patch.object(head_cut_faces.threading, 'Thread'):
+            response = self.client.post(f'/api/head-cuts/{self.run_id}/recognize', json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.addCleanup(vision.JOBS.pop, response.json()['job_id'], None)
+        config = json.loads((head_cuts.run_dir(self.run_id) / 'recognition.json').read_text(encoding='utf-8'))['config']
+        for key, value in payload.items():
+            self.assertEqual(config[key], value, f'{key} 应原样写入 config')
+
+    def test_recognize_rejects_out_of_range_gates(self):
+        self._seed_faces()
+        face_recognition.list_entries = Mock(return_value=[{'id': '0001', 'name': '张三'}])
+        for bad in ({'min_confidence': 1.5}, {'min_confidence': -0.1}, {'min_size': 0}, {'min_sharpness': -1}):
+            response = self.client.post(f'/api/head-cuts/{self.run_id}/recognize', json={'threshold': .4, **bad})
+            self.assertEqual(response.status_code, 422, f'{bad} 应被拒绝：{response.text}')
+
+
+class QualityGateTests(unittest.TestCase):
+    def test_confidence_gate_is_configurable(self):
+        """远景小脸置信度天然低于 0.8，门槛必须可调，否则全部无法进入比对。"""
+        import numpy as np
+
+        from scrfd_detector import assess_quality
+        face = {'bbox': [20, 20, 80, 90], 'confidence': .6,
+                'landmarks': [[35, 40], [65, 40], [50, 55], [40, 75], [60, 75]]}
+        image = np.random.default_rng(8).integers(0, 255, (100, 100, 3), dtype=np.uint8)
+        # 默认 0.8：0.6 置信度的人脸被拒
+        self.assertIn('人脸置信度不足', assess_quality(image, face)[0])
+        # 门槛降到检出阈值 0.5 后，置信度不再拦截
+        self.assertNotIn('人脸置信度不足', assess_quality(image, face, min_confidence=.5)[0])
+        # 置信度足够时默认门槛放行（保持匿名人脸流水线的原有行为）
+        confident = {**face, 'confidence': .95}
+        self.assertEqual(assess_quality(image, confident)[0], [])
+
+    def test_size_and_sharpness_gates_are_configurable(self):
+        import numpy as np
+
+        from scrfd_detector import assess_quality
+        face = {'bbox': [20, 20, 40, 40], 'confidence': .95,
+                'landmarks': [[25, 26], [35, 26], [30, 31], [26, 35], [34, 35]]}
+        image = np.random.default_rng(8).integers(0, 255, (100, 100, 3), dtype=np.uint8)
+        self.assertIn('原始人脸尺寸过小', assess_quality(image, face)[0])
+        self.assertNotIn('原始人脸尺寸过小', assess_quality(image, face, min_size=5)[0])
+        blank = np.zeros_like(image)
+        self.assertIn('人脸模糊', assess_quality(blank, {**face, 'bbox': [20, 20, 80, 90]})[0])
+        self.assertNotIn('人脸模糊', assess_quality(blank, {**face, 'bbox': [20, 20, 80, 90]}, min_sharpness=0)[0])
 
 
 if __name__ == '__main__':

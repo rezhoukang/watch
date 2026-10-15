@@ -82,6 +82,8 @@
             <option value="no_face">未检出人脸</option><option value="error">检测失败</option><option value="pending">未检测</option>
           </select>
           <label>识别阈值 ≥ <input id="cutRecThreshold" type="number" min="0" max="1" step="0.01" value="0.4"></label>
+          <label title="人脸检测置信度门槛：默认与 SCRFD 检出阈值一致(0.5)，避免重复设卡；调高更保守">质量置信度 ≥ <input id="cutRecConfidence" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+          <label title="人脸在原始像素下的短边下限：低于此值不参与比对（远景小脸会在此被拦）">最小人脸 ≥ <input id="cutRecSize" type="number" min="1" max="1000" step="1" value="24">px</label>
           <button id="cutRecognizeFaces" class="btn small" disabled title="对当前批次已检出的人脸做 1:N 识别（需先导入人脸库）">1:N 识别</button>
           <button id="cutRecCancel" class="btn small ghost" hidden>取消识别</button>
           <select id="cutRecFilter" aria-label="识别结果筛选">

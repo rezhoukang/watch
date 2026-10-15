@@ -139,12 +139,25 @@ def _save_recognition(run_id: str, record: dict) -> None:
         head_cuts._write(head_cuts.run_dir(run_id)/'recognition.json', record)
 
 
-def start_recognition(run_id: str, threshold: float = 0.40) -> str:
-    """对批次中所有已检出的人脸做 1:N 识别（后台任务，结果写 recognition.json）。"""
+def start_recognition(run_id: str, threshold: float = 0.40,
+                      min_confidence: float = 0.5, min_size: int = 24,
+                      min_sharpness: float = 50.0) -> str:
+    """对批次中所有已检出的人脸做 1:N 识别（后台任务，结果写 recognition.json）。
+
+    质量门槛均可调（不再是硬编码 0.8）：
+    - min_confidence 默认 0.5，与 SCRFD 检出阈值一致，避免重复设卡；
+    - min_size 是人脸在原始像素下的短边下限（默认 24）。
+    """
     import face_recognition
 
     if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
         raise ValueError('识别阈值必须在0到1之间')
+    if not math.isfinite(min_confidence) or not 0.0 <= min_confidence <= 1.0:
+        raise ValueError('人脸置信度门槛必须在0到1之间')
+    if isinstance(min_size, bool) or not isinstance(min_size, int) or not 1 <= min_size <= 1000:
+        raise ValueError('最小人脸像素必须在1到1000之间')
+    if not math.isfinite(min_sharpness) or not 0.0 <= min_sharpness <= 10000:
+        raise ValueError('清晰度门槛必须在0到10000之间')
     with head_cuts._lock:
         batch = head_cuts.read_run(run_id)
         if batch['status'] in ('queued', 'running'):
@@ -156,22 +169,25 @@ def start_recognition(run_id: str, threshold: float = 0.40) -> str:
             raise ValueError('识别模型不存在，请配置 weight/scrfd/w600k_r50.onnx')
         if not face_recognition.list_entries():
             raise ValueError('人脸库为空，请先导入学生花名册或手动添加')
-        # 收集所有已检出的人脸（crop_id -> 人脸列表）
+        # 收集所有已检出的人脸：识别必须用 HC 裁剪图，因为 face 的 bbox/landmarks 都是相对它的坐标
         crops = []
         detection = batch.get('face_detection') or {}
         for crop in batch['crops']:
             per_crop = (crop.get('face_detection') or {})
             faces = per_crop.get('faces', []) if per_crop.get('status') == 'detected' else []
             if faces:
-                crops.append({'crop_id': crop['crop_id'], 'faces': faces})
+                crops.append({'crop_id': crop['crop_id'], 'raw_file': crop['raw_file'], 'faces': faces})
         if not crops:
             raise ValueError('当前批次没有人脸可识别，请先运行人脸检测')
         job_id = uuid.uuid4().hex
         record = {'job_id': job_id, 'run_id': run_id, 'status': 'queued',
                   'created_at': datetime.now(timezone.utc).isoformat(), 'message': '等待 1:N 识别…',
-                  'config': {'model': 'w600k_r50.onnx', 'threshold': threshold, 'library_count': len(face_recognition.list_entries())},
+                  'config': {'model': 'w600k_r50.onnx', 'threshold': threshold,
+                             'min_confidence': min_confidence, 'min_size': min_size,
+                             'min_sharpness': min_sharpness,
+                             'library_count': len(face_recognition.list_entries())},
                   'total': sum(len(c['faces']) for c in crops), 'progress': 0,
-                  'matched': 0, 'unknown': 0, 'results': {}, 'errors': []}
+                  'matched': 0, 'unknown': 0, 'rejected': 0, 'results': {}, 'errors': []}
         _save_recognition(run_id, record)
         vision.JOBS[job_id] = {'id': job_id, 'type': 'head_face_recognition', 'run_id': run_id,
                                'status': 'running', 'total': record['total'], 'progress': 0, 'message': record['message']}
@@ -183,6 +199,11 @@ def _run_recognition(run_id: str, job_id: str, crops: list[dict], record: dict, 
     import face_recognition
 
     job = vision.JOBS[job_id]
+    # 质量门槛来自 config（可调），兼容旧记录缺字段的情况
+    config = record.get('config') or {}
+    min_confidence = config.get('min_confidence', 0.5)
+    min_size = config.get('min_size', 24)
+    min_sharpness = config.get('min_sharpness', 50)
     try:
         with _detection_lock:
             folder = head_cuts.run_dir(run_id)
@@ -192,28 +213,38 @@ def _run_recognition(run_id: str, job_id: str, crops: list[dict], record: dict, 
                 if job.get('cancel'):
                     record.update(status='cancelled', message='已取消人脸识别，已生成结果保留')
                     break
+                # 打开 HC 裁剪图：face 的 bbox/landmarks 都相对它，
+                # 若改用单张人脸裁剪图（faces/…png）则坐标系不一致，会导致质量取样和对齐都错位。
+                raw_file = crop.get('raw_file')
+                source_path = (folder/raw_file).resolve() if raw_file else None
+                source = cv2.imdecode(np.fromfile(str(source_path), dtype=np.uint8), cv2.IMREAD_COLOR) if source_path and source_path.is_file() else None
                 per_face = []
                 for face in crop['faces']:
-                    path = (folder/face['file']).resolve()
-                    image = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
-                    if image is None:
-                        per_face.append({'face_id': face['face_id'], 'status': 'error', 'message': '无法读取人脸裁剪'})
+                    if source is None:
+                        per_face.append({'face_id': face['face_id'], 'status': 'error', 'message': '无法读取原始裁剪图'})
                         continue
                     try:
-                        # 人脸裁剪图通常很小，直接复用 head_cuts 已保存的关键点做对齐提特征，
-                        # 避免二次检测在小图上失败；质量筛选仍是查询端防误报关卡。
+                        # 质量筛选与对齐都在 HC 坐标系下进行（bbox/landmarks 即原图像素尺度）。
                         landmarks = face.get('landmarks')
-                        reasons, quality = face_recognition.assess_quality(image, {'bbox': face.get('bbox', [0, 0, 0, 0]), 'landmarks': landmarks, 'confidence': face.get('confidence', 0.5)})
+                        bbox = face.get('bbox', [0, 0, 0, 0])
+                        reasons, quality = face_recognition.assess_quality(
+                            source, {'bbox': bbox, 'landmarks': landmarks, 'confidence': face.get('confidence', 0.5)},
+                            min_size=min_size, min_sharpness=min_sharpness, min_confidence=min_confidence)
+                        # 人脸在原始像素下的短边尺寸：供人工判断可识别性（24px 只是下限，不等于可靠）
+                        face_pixels = int(min(bbox[2] - bbox[0], bbox[3] - bbox[1]))
                         if reasons:
+                            record['rejected'] += 1
                             per_face.append({'face_id': face['face_id'], 'status': 'rejected',
-                                             'reasons': reasons, 'faces': []})
+                                             'reasons': reasons, 'face_pixels': face_pixels,
+                                             'quality': quality, 'faces': []})
                         elif landmarks:
-                            embedding = face_recognition.extract_embedding(image, landmarks)
+                            embedding = face_recognition.extract_embedding(source, landmarks)
                             match_result = face_recognition.match(embedding, threshold)
                             per_face.append({
                                 'face_id': face['face_id'],
                                 'status': 'matched' if match_result['matched'] else 'unknown',
                                 'match': match_result,
+                                'face_pixels': face_pixels,
                                 'candidates': face_recognition.match_top_k(embedding, k=3),
                                 'faces': [{'status': 'matched' if match_result['matched'] else 'unknown', 'match': match_result}] if match_result['matched'] else [{'status': 'unknown', 'match': match_result}],
                             })
@@ -234,7 +265,8 @@ def _run_recognition(run_id: str, job_id: str, crops: list[dict], record: dict, 
                     _save_recognition(run_id, record)
             else:
                 record.update(status='done_with_errors' if record['errors'] else 'done',
-                              message=f'人脸识别完成：命中 {record["matched"]}，未识别 {record["unknown"]}')
+                              message=(f'人脸识别完成：命中 {record["matched"]}，未识别 {record["unknown"]}，'
+                                       f'质量门槛拒绝 {record.get("rejected", 0)}'))
     except Exception as exc:
         record.update(status='failed', message=f'人脸识别失败：{exc}')
     finally:

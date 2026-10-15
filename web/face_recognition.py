@@ -14,6 +14,9 @@ router = APIRouter()
 
 class RecognizeRequest(BaseModel):
     threshold: float = Field(default=face_recognition.DEFAULT_MATCH_THRESHOLD, ge=0.0, le=1.0)
+    min_confidence: float = Field(default=face_recognition.DEFAULT_QUALITY_CONFIDENCE, ge=0.0, le=1.0)
+    min_size: int = Field(default=face_recognition.DEFAULT_MIN_FACE_PIXELS, ge=1, le=1000)
+    min_sharpness: float = Field(default=face_recognition.DEFAULT_MIN_SHARPNESS, ge=0.0, le=10000.0)
 
 
 @router.get("/api/face-library/status", summary="识别模型与人脸库状态")
@@ -62,9 +65,10 @@ def import_students() -> dict:
 
 @router.post("/api/head-cuts/{run_id}/recognize", summary="对已检出的全部人脸做1:N识别")
 def recognize_run_faces(run_id: str, payload: RecognizeRequest) -> dict:
-    """对批次中每个 crop 已检出的人脸裁剪做识别，结果写回 face_recognition.json。"""
+    """对批次中每个 crop 已检出的人脸裁剪做识别，结果写回 recognition.json。"""
     try:
-        job_id = head_cut_faces.start_recognition(run_id, payload.threshold)
+        job_id = head_cut_faces.start_recognition(run_id, payload.threshold, payload.min_confidence,
+                                                  payload.min_size, payload.min_sharpness)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"job_id": job_id, "run_id": run_id}

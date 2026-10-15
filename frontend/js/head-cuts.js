@@ -109,7 +109,7 @@ function renderHeads() {
   const recJob = record.recognition;
   const anyDetected = record.crops.some(c => c.face_detection?.status === 'detected');
   el('cutRecognizeFaces').disabled = running(record.status) || running(faceJob?.status) || running(recJob?.status) || !anyDetected;
-  el('cutRecThreshold').disabled = running(recJob?.status);
+  for (const id of ['cutRecThreshold', 'cutRecConfidence', 'cutRecSize']) el(id).disabled = running(recJob?.status);
   el('cutRecCancel').hidden = !running(recJob?.status);
   el('cutFaceProgress').textContent += recJob
     ? `｜识别 ${recJob.progress}/${recJob.total} · ${recJob.message} · 阈值 ${recJob.config.threshold}` : '';
@@ -149,18 +149,21 @@ function renderHeads() {
     if (detection?.faces?.length) {
       const faces = document.createElement('div'); faces.className = 'head-face-strip';
       const recognition = crop.recognition;
-      const recByName = {};
-      if (recognition?.faces) {
-        for (const item of recognition.faces) {
-          const first = item.faces?.[0];
-          if (first?.status === 'matched' && first.match?.name) recByName[item.face_id] = first.match;
-        }
-      }
+      const recByFace = {};
+      for (const item of (recognition?.faces || [])) recByFace[item.face_id] = item;
+      const sizeNote = rec => (rec?.face_pixels ? `｜人脸 ${rec.face_pixels}px` : '');
       faces.innerHTML = detection.faces.map(face => {
-        const match = recByName[face.face_id];
-        const badge = match
-          ? `<em class="rec-badge rec-hit" title="相似度 ${match.similarity}">${esc(match.name)} ${match.similarity}</em>`
-          : (recognition?.status === 'done' ? '<em class="rec-badge">未识别</em>' : '');
+        const rec = recByFace[face.face_id];
+        let badge = '';
+        if (rec?.status === 'matched') {
+          badge = `<em class="rec-badge rec-hit" title="相似度 ${rec.match?.similarity}${sizeNote(rec)}">${esc(rec.match?.name || '')} ${rec.match?.similarity}</em>`;
+        } else if (rec?.status === 'rejected') {
+          badge = `<em class="rec-badge rec-skip" title="${esc((rec.reasons || []).join('；'))}${sizeNote(rec)}">质量不足</em>`;
+        } else if (rec?.status === 'unknown') {
+          badge = `<em class="rec-badge" title="最高相似度 ${rec.match?.similarity}${sizeNote(rec)}">未识别</em>`;
+        } else if (rec?.status === 'error') {
+          badge = `<em class="rec-badge rec-skip" title="${esc(rec.message || '')}">识别失败</em>`;
+        }
         return `<a href="${esc(fileUrl(record.run_id, face.file))}" target="_blank"><img src="${esc(fileUrl(record.run_id, face.file))}" alt="${esc(face.face_id)}" loading="lazy"><small>${Number(face.confidence).toFixed(2)}</small>${badge}</a>`;
       }).join('');
       figure.appendChild(faces);
@@ -224,7 +227,12 @@ el('cutRecognizeFaces').addEventListener('click', async () => {
   try {
     const threshold = Number(el('cutRecThreshold').value || '.4');
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('识别阈值必须在0到1之间');
-    await api(`/api/head-cuts/${runId}/recognize`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ threshold }) });
+    const minConfidence = Number(el('cutRecConfidence').value || '.5');
+    if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) throw new Error('质量置信度门槛必须在0到1之间');
+    const minSize = Number(el('cutRecSize').value || '24');
+    if (!Number.isInteger(minSize) || minSize < 1 || minSize > 1000) throw new Error('最小人脸像素必须是1到1000之间的整数');
+    await api(`/api/head-cuts/${runId}/recognize`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threshold, min_confidence: minConfidence, min_size: minSize }) });
     if (current?.run_id === runId) await openBatch(runId);
   } catch (error) { showError(el('cutFaceProgress'), error, '1:N 识别失败'); el('cutRecognizeFaces').disabled = false; }
 });

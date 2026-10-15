@@ -217,6 +217,7 @@
 .head-face-strip img { width: 60px; height: 72px; object-fit: contain; }
 .head-face-strip .rec-badge { display: block; margin-top: 2px; padding: 1px 5px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #f1f3f4; color: #52647b; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .head-face-strip .rec-badge.rec-hit { background: #e6f4ea; color: #137333; }
+.head-face-strip .rec-badge.rec-skip { background: #fef7e0; color: #8a6d00; }
 .head-face-link { display: block; margin-top: 5px; font-size: 12px; color: #3465a4; }
 .head-cut-previews { display: flex; gap: 10px; overflow-x: auto; padding-top: 12px; }
 .head-cut-previews a { width: 130px; flex-shrink: 0; font-size: 11px; color: #3465a4; text-decoration: none; }

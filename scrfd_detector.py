@@ -67,12 +67,18 @@ class ScrfdDetector:
         return [faces[int(i)] for i in indices]
 
 
-def assess_quality(image, face: dict, min_size: int = 24, min_sharpness: float = 50) -> tuple[list[str], dict]:
-    """Conservative geometric/clarity heuristics; not a true 3-D pose estimate."""
+def assess_quality(image, face: dict, min_size: int = 24, min_sharpness: float = 50,
+                   min_confidence: float = .8) -> tuple[list[str], dict]:
+    """Conservative geometric/clarity heuristics; not a true 3-D pose estimate.
+
+    All three gates are parameters. `min_confidence` defaults to 0.8 (the
+    anonymous-face review baseline); callers whose detector already ran at a
+    lower threshold should pass that threshold instead of double-gating.
+    """
     x1, y1, x2, y2 = face['bbox']
     points = np.array(face['landmarks'], dtype=np.float64)
     reasons = []
-    if face['confidence'] < .8:
+    if face['confidence'] < min_confidence:
         reasons.append("人脸置信度不足")
     if min(x2-x1, y2-y1) < min_size:
         reasons.append("原始人脸尺寸过小")

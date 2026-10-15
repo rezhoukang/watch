@@ -1,2 +1,4 @@
-# Optional: anonymous face boxes, landmarks and aligned crops only.
+# Optional: anonymous face boxes, landmarks, aligned crops and 1:N recognition.
+# Requires weight/scrfd/det_10g.onnx (detection) and weight/scrfd/w600k_r50.onnx
+# (ArcFace recognition, same insightface buffalo_l package). See README.md.
 onnxruntime>=1.20
