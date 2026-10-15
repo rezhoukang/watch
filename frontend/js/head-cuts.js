@@ -1,5 +1,5 @@
-import { el, esc, api, showError } from './core.js?v=84';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=84';
+import { el, esc, api, showError } from './core.js?v=85';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=85';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;
@@ -153,7 +153,7 @@ async function pollBatch(runId, version) {
     }
   } catch (error) {
     if (activeJob === runId) activeJob = null;
-    syncSelection(); showError(el('cutProgress'), error, '读取人脸检测进度失败');
+    syncSelection(); showError(el('cutProgress'), error, '读取人脸识别批次进度失败');
   }
 }
 
@@ -274,7 +274,7 @@ async function loadHeadCuts() {
   try {
     await loadCutImages();
     await loadBatches();
-  } catch (error) { showError(el('cutProgress'), error, '加载人脸检测失败'); }
+  } catch (error) { showError(el('cutProgress'), error, '加载人脸识别页面失败'); }
 }
 
 el('cutRefresh').addEventListener('click', loadHeadCuts);

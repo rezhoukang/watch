@@ -16,11 +16,11 @@
   <nav class="tabs">
     <button class="tab active" data-tab="upload">上传</button>
     <button class="tab" data-tab="detect">图片推理</button>
-    <button class="tab" data-tab="headcut">人脸检测</button>
+    <button class="tab" data-tab="headcut">人脸识别</button>
     <button class="tab" data-tab="video">视频推理</button>
     <button class="tab" data-tab="train">训练</button>
     <button class="tab" data-tab="dataset">数据集管理</button>
-    <button class="tab" data-tab="aggregate">聚合操作</button>
+    <button class="tab" data-tab="aggregate">聚合推理</button>
   </nav>
 
   <!-- ========== 上传 ========== -->
@@ -81,7 +81,7 @@
         <h2>头管理</h2>
         <div class="head-cut-controls">
           <div class="head-cut-filters">
-            <label>批次 <select id="cutBatchSelect" aria-label="人脸检测批次"><option value="">暂无批次</option></select></label>
+            <label>批次 <select id="cutBatchSelect" aria-label="人脸识别批次"><option value="">暂无批次</option></select></label>
             <label>来源 <select id="cutSourceFilter" aria-label="裁剪来源"><option value="">全部图片</option></select></label>
             <input id="cutSearch" placeholder="搜索编号或类别" aria-label="搜索裁剪图">
           </div>
@@ -315,7 +315,7 @@
     </div>
   </section>
 
-  <!-- ========== 聚合操作（待推理图片 → 目标检测 → 人脸识别 → 姿势检测绑定）========== -->
+  <!-- ========== 聚合推理（待推理图片 → 目标检测 → 人脸识别 → 姿势检测绑定）========== -->
   <section class="panel" id="tab-aggregate">
     <div class="toolbar">
       <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别</label>
@@ -341,7 +341,7 @@
 
     <div class="subpanel" id="aggregate-pane-result">
       <p id="aggStatus" class="status" role="status"></p>
-      <div id="aggResult" class="result-box">点击「待推理图片」里的图片开始聚合：目标检测 → 人脸识别 → 姿势检测与绑定</div>
+      <div id="aggResult" class="result-box">点击「待推理图片」里的图片开始聚合推理：目标检测 → 人脸识别 → 姿势检测与绑定</div>
     </div>
   </section>
 
@@ -413,6 +413,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=84"></script>
+<script type="module" src="/app.js?v=85"></script>
 </body>
 </html>

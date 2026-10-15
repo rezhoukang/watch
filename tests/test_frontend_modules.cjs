@@ -9,7 +9,18 @@ class Element {
   constructor() {
     this.value = ''; this.dataset = {}; this.events = {}; this.children = []; this.queries = new Map();
     this.complete = true; this.naturalWidth = 100; this.naturalHeight = 80;
-    this.style = { setProperty() {} }; this.classList = { add() {}, remove() {}, toggle() {} };
+    this.style = { setProperty() {} };
+    const classes = new Set();
+    this.classList = {
+      add: (...names) => names.forEach(name => classes.add(name)),
+      remove: (...names) => names.forEach(name => classes.delete(name)),
+      contains: name => classes.has(name),
+      toggle: (name, force) => {
+        const enabled = force === undefined ? !classes.has(name) : !!force;
+        if (enabled) classes.add(name); else classes.delete(name);
+        return enabled;
+      },
+    };
   }
   addEventListener(name, callback) { this.events[name] = callback; }
   appendChild(child) { this.children.push(child); }
@@ -422,6 +433,17 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(headLayer.children[0].style.width, '40%');
   assert.equal(headLayer.children[0].children[0].textContent, '张三 0.62 · 低头');
   assert.equal(aggBox.querySelector('#aggResultCount').textContent.includes('图上 1 个 head 框'), true);
+  const aggViewer = aggBox.querySelector('[data-role="viewer"]');
+  const tagToggle = aggBox.querySelector('[data-role="alwaystag"]');
+  assert.equal(tagToggle.checked, false);
+  assert.equal(aggViewer.classList.contains('always-tags'), false);
+  const beforeTagToggle = calls.length;
+  tagToggle.checked = true;
+  tagToggle.events.change({ target: tagToggle });
+  assert.equal(aggViewer.classList.contains('always-tags'), true);
+  aggBox.querySelector('[data-role="baseimg"]').events.load();
+  assert.equal(aggViewer.classList.contains('always-tags'), true, '重绘保留常显标签');
+  assert.equal(calls.length, beforeTagToggle, '切换标签显示不能触发推理请求');
   // 勾掉两步后只跑目标检测，参数随勾选变化
   nodes.get('aggFaceRecognition').checked = false;
   nodes.get('aggPose').checked = false;
@@ -433,6 +455,11 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(aggregatePayload.pose, false);
   assert.equal(aggregatePayload.threshold, 0.35);
   assert.equal(aggregatePayload.pose_confidence, 0.6, '清空输入框要回落到默认置信度');
+  assert.equal(aggBox.querySelector('[data-role="alwaystag"]').checked, true, '切换图片后保留常显标签选择');
+  assert.equal(aggViewer.classList.contains('always-tags'), true);
+  tagToggle.checked = false;
+  tagToggle.events.change({ target: tagToggle });
+  assert.equal(aggViewer.classList.contains('always-tags'), false);
   // 点图后要自动切到「聚合结果」子页，并把状态切回图片页的刷新按钮藏起来
   assert.equal(aggregateSubtabs[0].dataset.agg, 'images');
   assert.equal(nodes.get('aggRefresh').hidden, true);

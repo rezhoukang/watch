@@ -1,8 +1,8 @@
-import { el, esc, api, showError } from './core.js?v=84';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=84';
-import { classColor } from './viewer.js?v=84';
+import { el, esc, api, showError } from './core.js?v=85';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=85';
+import { classColor } from './viewer.js?v=85';
 
-/* ==================== 聚合操作（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
+/* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
 const STEP_LABELS = { detect: '目标检测', face: '人脸识别', pose: '姿势检测' };
 /** 只画 head 框；筛选按「已贴姓名 / 未识别 / 已绑姿势」分档，与图片推理的类别胶囊同一套交互 */
@@ -15,6 +15,7 @@ const FILTERS = [
 const AGG_PANES = { images: 'aggregate-pane-images', result: 'aggregate-pane-result' };
 let ACTIVE_RECORD = null;
 let ACTIVE_FILTER = 'all';
+let ALWAYS_TAGS = false;
 
 /** 读取聚合参数：人脸识别 / 姿势检测由勾选框决定是否参与。
  *
@@ -91,6 +92,7 @@ function paintHeads() {
   if (!record) return;
   const layer = box.querySelector('[data-role="boxes"]');
   if (!layer) return;
+  box.querySelector('[data-role="viewer"]').classList.toggle('always-tags', ALWAYS_TAGS);
   layer.innerHTML = '';
   const shown = visibleTargets();
   shown.forEach((target) => {
@@ -158,10 +160,12 @@ function renderAggregateResult(record, filename) {
   box.innerHTML =
     `<div class="agg-steps">${stepLine(record.steps)}</div>` +
     (notes.length ? `<p class="hint">${esc(notes.join('；'))}</p>` : '') +
+    `<div class="viewer-bar">` +
+    `<label><input type="checkbox" data-role="alwaystag"> 常显标签</label>` +
     `<div class="chips" data-role="aggfilter">` +
     FILTERS.map((filter, index) => `<button class="chip" data-filter="${filter.key}" data-label="${esc(filter.label)}"` +
       ` style="background:${classColor(index)}">${esc(filter.label)}</button>`).join('') +
-    `</div>` +
+    `</div></div>` +
     `<div class="viewer" data-role="viewer">` +
     `<img class="base" data-role="baseimg" src="/images/${encodeURIComponent(filename)}" alt="聚合图">` +
     `<div class="boxes" data-role="boxes"></div></div>` +
@@ -174,6 +178,12 @@ function renderAggregateResult(record, filename) {
     `姓名归属与姿势绑定：${esc(record.bind?.rule || '')}。结果只画 head 框，姓名与姿势状态都挂在这个框上；` +
     `没绑上的人脸 / 姿势在清单里列出来，不会硬塞给某个人头。</p>`;
 
+  const tagToggle = box.querySelector('[data-role="alwaystag"]');
+  tagToggle.checked = ALWAYS_TAGS;
+  tagToggle.addEventListener('change', event => {
+    ALWAYS_TAGS = event.target.checked;
+    paintHeads();
+  });
   box.querySelectorAll('[data-role="aggfilter"] .chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       ACTIVE_FILTER = chip.dataset.filter;
@@ -197,7 +207,7 @@ async function aggregateImage(filename) {
     const payload = readAggregateOptions();
     const paint = () => {
       const seconds = ((Date.now() - t0) / 1000).toFixed(1);
-      box.innerHTML = `<div>聚合中… <b>${seconds}s</b></div>` +
+      box.innerHTML = `<div>聚合推理中… <b>${seconds}s</b></div>` +
         `<div style="font-size:12px;color:#80868b;margin-top:6px">图片：${esc(filename)}｜` +
         `人脸识别 ${payload.face ? '开' : '关'}｜姿势检测 ${payload.pose ? '开' : '关'}<br>` +
         `（目标检测固定用「图片推理 → 目标检测」；第一次运行要加载模型，超过 600 秒自动报超时）</div>`;
