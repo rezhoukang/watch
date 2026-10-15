@@ -51,6 +51,10 @@ class PoseTests(unittest.TestCase):
                 response = client.post('/api/detect/image/pose.png?weights=yolov8m-pose.pt&head_down_r_threshold=.3&head_up_r_threshold=.4')
                 self.assertEqual(response.status_code, 200, response.text)
                 record = response.json()
+                self.assertEqual(model.predict.call_args.kwargs['conf'], .6)
+                self.assertEqual(roi_model.predict.call_args.kwargs['conf'], .03)
+                self.assertEqual(record['parameters']['confidence'], .6)
+                self.assertEqual(record['pose']['roi_rule']['confidence'], .03)
                 self.assertEqual(record['detections'][0]['behavior']['state'], '疑似看手机')
                 self.assertEqual(record['detections'][0]['behavior']['roi']['objects'][0]['bbox'], [45, 65, 55, 75])
                 saved = client.get(record['record_url']).json()
@@ -58,6 +62,13 @@ class PoseTests(unittest.TestCase):
                 with patch.object(pose_support, 'draw_cv2') as draw:
                     vision._annotate_frame(person.orig_img.copy(), person, head_down_r_threshold=.3, head_up_r_threshold=.4)
                     self.assertEqual(draw.call_args.args[4][0]['state'], '疑似看手机')
+                override = client.post('/api/detect/image/pose.png?weights=yolov8m-pose.pt&conf=.8&roi_confidence=.27&head_down_r_threshold=.3&head_up_r_threshold=.4')
+                self.assertEqual(override.status_code, 200, override.text)
+                self.assertEqual(model.predict.call_args.kwargs['conf'], .8)
+                self.assertEqual(roi_model.predict.call_args.kwargs['conf'], .27)
+                vision.prelabel_image(root/'pose.png', weights='yolov8m-pose.pt', head_down_r_threshold=.3, head_up_r_threshold=.4)
+                self.assertEqual(model.predict.call_args.kwargs['conf'], .6)
+                self.assertEqual(roi_model.predict.call_args.kwargs['conf'], .03)
 
     def test_image_api_preserves_keypoints_and_archives_visible_skeleton(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,5 +1,5 @@
-import { el, esc, api, showError } from './core.js?v=81';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=81';
+import { el, esc, api, showError } from './core.js?v=82';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=82';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;
@@ -170,7 +170,11 @@ function renderHeads() {
     ? `${faceJob.progress}/${faceJob.total} · ${faceJob.message} · 阈值 ${faceJob.config.confidence}` : '';
   const recJob = record.recognition;
   const anyDetected = record.crops.some(c => c.face_detection?.status === 'detected');
-  el('cutRecognizeFaces').disabled = running(record.status) || running(faceJob?.status) || running(recJob?.status) || !anyDetected;
+  // 切割完成后即可识别；若还没做过人脸检测，点击时会自动先检测再识别
+  el('cutRecognizeFaces').disabled = running(record.status) || running(faceJob?.status) || running(recJob?.status) || !record.crop_count;
+  el('cutRecognizeFaces').title = !record.crop_count
+    ? '当前批次还没有裁剪图'
+    : (anyDetected ? '对当前批次已检出的人脸做 1:N 识别' : '未做人脸检测，点击将先自动检测人脸，再执行 1:N 识别');
   for (const id of ['cutRecThreshold', 'cutRecConfidence', 'cutRecSize']) el(id).disabled = running(recJob?.status);
   el('cutRecCancel').hidden = !running(recJob?.status);
   el('cutFaceProgress').textContent += recJob
@@ -285,20 +289,42 @@ el('cutSourceFilter').addEventListener('change', () => { page = 0; renderHeads()
 el('cutSearch').addEventListener('input', () => { page = 0; renderHeads(); });
 el('cutFaceFilter').addEventListener('change', () => { page = 0; renderHeads(); });
 el('cutRecFilter').addEventListener('change', () => { page = 0; renderHeads(); });
+async function startFaceDetection(runId) {
+  const confidence = Number(el('cutFaceConfidence').value || '.5');
+  if (!Number.isFinite(confidence) || confidence < .01 || confidence > .99) throw new Error('人脸置信度必须在0.01到0.99之间');
+  const data = await api(`/api/head-cuts/${runId}/faces`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confidence }) });
+  return data.job_id;
+}
+
+async function waitFaceDetection(runId, jobId, version) {
+  // 轮询批次直到人脸检测任务结束（done / failed / cancelled / interrupted）
+  for (let attempt = 0; attempt < 600; attempt++) {
+    const record = await api(`/api/head-cuts/${runId}`);
+    if (version !== loadVersion || current?.run_id !== runId) return false;
+    const status = record.face_detection?.status;
+    if (!running(status)) {
+      current = record;
+      renderHeads();
+      return status === 'done' || status === 'done_with_errors';
+    }
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+  throw new Error('等待人脸检测完成超时');
+}
+
 el('cutDetectFaces').addEventListener('click', async () => {
   if (!current) return;
   const runId = current.run_id;
   el('cutDetectFaces').disabled = true;
   try {
-    const confidence = Number(el('cutFaceConfidence').value || '.5');
-    if (!Number.isFinite(confidence) || confidence < .01 || confidence > .99) throw new Error('人脸置信度必须在0.01到0.99之间');
-    await api(`/api/head-cuts/${runId}/faces`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confidence }) });
+    await startFaceDetection(runId);
     if (current?.run_id === runId) await openBatch(runId);
   } catch (error) { showError(el('cutFaceProgress'), error, '人脸检测失败'); el('cutDetectFaces').disabled = false; }
 });
 el('cutRecognizeFaces').addEventListener('click', async () => {
   if (!current) return;
   const runId = current.run_id;
+  const version = loadVersion;
   el('cutRecognizeFaces').disabled = true;
   try {
     const threshold = Number(el('cutRecThreshold').value || '.4');
@@ -307,6 +333,16 @@ el('cutRecognizeFaces').addEventListener('click', async () => {
     if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) throw new Error('质量置信度门槛必须在0到1之间');
     const minSize = Number(el('cutRecSize').value || '24');
     if (!Number.isInteger(minSize) || minSize < 1 || minSize > 1000) throw new Error('最小人脸像素必须是1到1000之间的整数');
+    // 若本批次还没有任何已检出的人脸，先自动触发批量检测并等它跑完，再执行识别
+    const hasFaces = current.crops.some(c => c.face_detection?.status === 'detected');
+    if (!hasFaces) {
+      el('cutFaceProgress').textContent = '尚未检测人脸：先自动运行批量检测…';
+      const faceJobId = await startFaceDetection(runId);
+      const ok = await waitFaceDetection(runId, faceJobId, version);
+      if (!ok || current?.run_id !== runId) return;
+      const detected = current.crops.some(c => c.face_detection?.status === 'detected');
+      if (!detected) throw new Error('人脸检测已完成，但没有任何裁剪检出人脸，无法识别');
+    }
     await api(`/api/head-cuts/${runId}/recognize`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ threshold, min_confidence: minConfidence, min_size: minSize }) });
     if (current?.run_id === runId) await openBatch(runId);

@@ -85,7 +85,7 @@ def get_annotate_image(filename: str):
 @router.post("/api/annotate/prelabel/{filename:path}", summary="标注器：对当前图片做预标注")
 def prelabel_image(
     filename: str,
-    conf: float = 0.38,
+    conf: float | None = None,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
     imgsz: int = 640,
@@ -96,7 +96,7 @@ def prelabel_image(
     head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
     head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
     pose_roi: bool = True,
-    roi_confidence: float = Query(default=0.6, ge=0, le=1),
+    roi_confidence: float = Query(default=vision.DEFAULT_ROI_CONFIDENCE, ge=0, le=1),
 ) -> dict:
     """用与推理一致的权重选项对单张图片做推理，结果转成标注框返回。
     filename 形如 <dataset>/<split>/<img>。
@@ -116,7 +116,7 @@ def prelabel_image(
     if not ok:
         raise HTTPException(status_code=503, detail=reason)
 
-    conf = common._clamp_conf(conf)
+    conf = common._clamp_conf(vision.resolve_confidence(weights, conf))
     class_list = common._parse_classes(classes)
     ds_dir = vision.find_dataset_dir(img_path)
     ds_classes = vision.dataset_classes(ds_dir)

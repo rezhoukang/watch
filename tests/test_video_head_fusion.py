@@ -75,6 +75,14 @@ class VideoHeadFusionTests(unittest.TestCase):
                 self.assertTrue(start.call_args.kwargs["rtdetr_base"])
                 self.assertEqual(start.call_args.kwargs["merge_iou"], 0.3)
                 self.assertEqual(start.call_args.kwargs["merge_confidence"], 0.5)
+                pose_response = TestClient(app.app).post('/api/detect/video/test.mp4?weights=yolov8m-pose.pt')
+                self.assertEqual(pose_response.status_code, 200, pose_response.text)
+                self.assertEqual(start.call_args.kwargs['conf'], .6)
+                self.assertEqual(start.call_args.kwargs['roi_confidence'], .03)
+                override = TestClient(app.app).post('/api/detect/video/test.mp4?weights=yolov8m-pose.pt&conf=.8&roi_confidence=.27')
+                self.assertEqual(override.status_code, 200, override.text)
+                self.assertEqual(start.call_args.kwargs['conf'], .8)
+                self.assertEqual(start.call_args.kwargs['roi_confidence'], .27)
 
     def test_video_worker_exports_fused_coordinates_counts_and_preview_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

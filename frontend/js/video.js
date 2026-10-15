@@ -1,8 +1,8 @@
-import { el, esc, api, banner, showError } from './core.js?v=81';
-import { readDetectOptions } from './models.js?v=81';
-import { pollJob } from './jobs.js?v=81';
-import { showHeadChart } from './charts.js?v=81';
-import { loadOutputs } from './outputs.js?v=81';
+import { el, esc, api, banner, showError } from './core.js?v=82';
+import { readDetectOptions } from './models.js?v=82';
+import { pollJob } from './jobs.js?v=82';
+import { showHeadChart } from './charts.js?v=82';
+import { loadOutputs } from './outputs.js?v=82';
 
 /* ==================== 视频推理 ==================== */
 
@@ -173,11 +173,10 @@ async function detectVideo(filename, btn) {
 
   try {
     const headDetection = !!el('vidHeadDetection').checked;
-    const conf = headDetection ? '0.45' : el('vidConf').value || '0.38';
     const stride = el('vidStride').value || '1';
     const render = el('vidRender').value || 'box';
     const { start, end } = readVideoRange(item);
-    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence } = readDetectOptions('vid');
+    const { weights, conf, isWorld, classes, isRtdetr, isPose, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence } = readDetectOptions('vid');
     const rangeText = end == null ? `全片` : `${fmtDuration(start)} ~ ${fmtDuration(end)}`;
     const renderText = render === 'dot' ? '中心点' : '框';
     const modeText = headDetection ? `目标检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜640｜IoU ≤ ${mergeIou} 补齐` : isWorld

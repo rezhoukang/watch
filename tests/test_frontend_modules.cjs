@@ -25,7 +25,6 @@ class Element {
   scrollIntoView() {}
   getBoundingClientRect() { return { left: 0 }; }
   setAttribute() {}
-  click() { this.clicked = true; }
 }
 const root = path.resolve(__dirname, '../frontend');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -37,7 +36,6 @@ const subtabs = ['images', 'result', 'history'].map((name) => {
   const tab = new Element(); tab.dataset.sub = name; return tab;
 });
 const calls = [];
-let allowImageDelete = true;
 const responses = {
   '/api/yolo/status': { message: 'ready', available: true, weights: ['test.pt'], default_weights: 'test.pt' },
   '/api/images': { images: [] }, '/api/videos': { videos: [], outputs: [] },
@@ -46,11 +44,6 @@ const responses = {
 };
 const context = vm.createContext({
   console, setTimeout, clearTimeout, AbortController, URLSearchParams,
-  confirm: () => allowImageDelete,
-  FormData: class {
-    constructor() { this.fields = new Map(); }
-    append(key, value) { this.fields.set(key, value); }
-  },
   window: { addEventListener() {}, scrollTo() {} },
   document: {
     getElementById: (id) => nodes.get(id) || null,
@@ -113,6 +106,47 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(cutPayload, { filenames: ['课堂A.png'], rtdetr_base: false, merge_iou: .1, merge_confidence: .55 });
   assert.equal(nodes.get('cutHeadGrid').children.length, 1);
   assert(nodes.get('cutHeadGrid').children[0].innerHTML.includes('HC001-001'));
+  // 切割完成后「1:N 识别」就可点；未做过人脸检测时点击会自动先检测再识别
+  assert.equal(nodes.get('cutRecognizeFaces').disabled, false, '切割完成后识别按钮应可点');
+  assert(nodes.get('cutRecognizeFaces').title.includes('先自动检测'), '未检测时应提示会自动先检测');
+  let autoFaceCalls = 0, autoFacePayload, autoRecPayload;
+  const recordRef = responses[`/api/head-cuts/${cutRunId}`];
+  const originalGet = responses[`/api/head-cuts/${cutRunId}`];
+  responses[`/api/head-cuts/${cutRunId}/faces`] = options => {
+    autoFaceCalls++;
+    autoFacePayload = JSON.parse(options.body);
+    recordRef.face_detection = { job_id: 'auto-face', status: 'running', progress: 0, total: 1, config: { confidence: .5 }, message: '检测中' };
+    return { job_id: 'auto-face', run_id: cutRunId };
+  };
+  // GET：检测任务从 running 一次性翻转到 done，并让裁剪带上已检出人脸
+  responses[`/api/head-cuts/${cutRunId}`] = options => {
+    if (options.method) return originalGet(options);
+    if (recordRef.face_detection?.status === 'running') {
+      recordRef.face_detection = { job_id: 'auto-face', status: 'done', progress: 1, total: 1, config: { confidence: .5 }, message: '人脸检测完成' };
+      recordRef.crops[0].face_detection = { status: 'detected', face_count: 1,
+        faces: [{ face_id: 'HC001-001_F01', confidence: .8, file: 'faces/HC001-001_F01.png' }] };
+    }
+    return recordRef;
+  };
+  responses[`/api/head-cuts/${cutRunId}/recognize`] = options => {
+    autoRecPayload = JSON.parse(options.body);
+    recordRef.recognition = { job_id: 'auto-rec', status: 'done', progress: 1, total: 1, config: { threshold: .4 }, message: '识别完成' };
+    recordRef.crops[0].recognition = { crop_id: 'HC001-001', status: 'done', name: '张三',
+      faces: [{ face_id: 'HC001-001_F01', status: 'matched', face_pixels: 26,
+        match: { matched: true, entry_id: '0001', name: '张三', similarity: .95, photo_url: '/api/face-library/0001/photo' } }] };
+    return { job_id: 'auto-rec', run_id: cutRunId };
+  };
+  await nodes.get('cutRecognizeFaces').events.click();
+  await flush();
+  assert.equal(autoFaceCalls, 1, '未检测时应自动触发一次批量检测');
+  assert.deepEqual(autoFacePayload, { confidence: .5 });
+  assert.deepEqual(autoRecPayload, { threshold: .4, min_confidence: .5, min_size: 24 });
+  assert(nodes.get('cutFaceProgress').textContent.includes('识别完成'), '自动检测后应继续识别');
+  assert(nodes.get('cutHeadGrid').children[0].children.some(node => node.innerHTML.includes('rec-hit')));
+  // 恢复原始 mock 并清掉自动用例写入的检测/识别状态，避免污染后续用例
+  responses[`/api/head-cuts/${cutRunId}`] = originalGet;
+  delete recordRef.face_detection; delete recordRef.recognition;
+  delete recordRef.crops[0].face_detection; delete recordRef.crops[0].recognition;
   assert(nodes.get('cutHeadGrid').children[0].children.every(child => child.type !== 'text' && !child.children.some(input => input.type === 'text')),
     '头管理卡片不应包含人工备注输入框');
   let facePayload;
@@ -267,9 +301,22 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(deleted, 'example');
   const keypoints = Array.from({ length: 17 }, () => [0, 0, 0]);
   for (const prefix of ['det', 'vid', 'ann']) {
+    const originalConfidence = nodes.get(`${prefix}Conf`).value;
     nodes.get(`${prefix}Weights`).value = 'yolov8m-pose.pt';
     nodes.get(`${prefix}Weights`).events.change();
     assert.equal(nodes.get(`${prefix}PoseOptions`).hidden, false);
+    assert.equal(nodes.get(`${prefix}Conf`).value, '0.6');
+    nodes.get(`${prefix}RoiConfidence`).value = '';
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).roiConfidence, .03);
+    nodes.get(`${prefix}Conf`).value = '0.78';
+    nodes.get(`${prefix}MergeIou`).events.input();
+    assert.equal(nodes.get(`${prefix}Conf`).value, '0.78', '更新其他控件不能重置手动置信度');
+    nodes.get(`${prefix}HeadDetection`).checked = true;
+    nodes.get(`${prefix}HeadDetection`).events.change();
+    assert.equal(nodes.get(`${prefix}Conf`).value, '0.45');
+    nodes.get(`${prefix}HeadDetection`).checked = false;
+    nodes.get(`${prefix}HeadDetection`).events.change();
+    assert.equal(nodes.get(`${prefix}Conf`).value, '0.78');
     nodes.get(`${prefix}PoseRoi`).checked = true;
     nodes.get(`${prefix}RoiConfidence`).value = '0.7';
     assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).poseRoi, true);
@@ -290,6 +337,15 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     nodes.get(`${prefix}Weights`).value = 'medium.pt';
     nodes.get(`${prefix}Weights`).events.change();
     assert.equal(nodes.get(`${prefix}PoseOptions`).hidden, true);
+    assert.equal(nodes.get(`${prefix}Conf`).value, originalConfidence);
+    nodes.get(`${prefix}Weights`).value = 'yolov8m-pose.pt';
+    nodes.get(`${prefix}Weights`).events.change();
+    assert.equal(nodes.get(`${prefix}Conf`).value, '0.78', '再次选择 Pose 保留手动设置');
+    nodes.get(`${prefix}Conf`).value = '';
+    assert.equal(modules.get(path.join(root, 'js/models.js')).namespace.readDetectOptions(prefix).conf, '0.6');
+    nodes.get(`${prefix}Conf`).value = '0.78';
+    nodes.get(`${prefix}Weights`).value = 'medium.pt';
+    nodes.get(`${prefix}Weights`).events.change();
   }
   keypoints[5] = [20, 30, 0.9]; keypoints[7] = [40, 50, 0.8]; keypoints[9] = [70, 60, 0.2];
   keypoints[11] = [80, 70, 0.9];
@@ -309,65 +365,6 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(viewer.querySelector('[data-role="tablebody"]').children.some(row => row.innerHTML.includes('疑似阅读')));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
-  // Head-cut source management: multi-upload, cancellation and partial deletion failures.
-  nodes.get('cutUpload').events.click();
-  assert.equal(nodes.get('cutUploadInput').clicked, true);
-  const uploadNames = [];
-  responses['/api/upload'] = options => {
-    assert.equal(options.method, 'POST');
-    const file = options.body.fields.get('file'); uploadNames.push(file.name);
-    if (file.name === 'invalid.png') throw new Error('Upload failed');
-    const images = responses['/api/images'].images;
-    const overwritten = images.some(image => image.filename === file.name);
-    if (!overwritten) images.push({ filename: file.name, url: `/images/${file.name}` });
-    return { filename: file.name, overwritten };
-  };
-  const upload = nodes.get('cutUploadInput').events.change({ target: { files: [
-    { name: 'uploaded-a.png' }, { name: 'invalid.png' }, { name: 'uploaded-b.png' }, { name: '课堂A.png' },
-  ] } });
-  assert.equal(nodes.get('cutUpload').disabled, true);
-  assert.equal(nodes.get('cutInfer').disabled, true);
-  assert.equal(nodes.get('cutDeleteSelected').disabled, true);
-  await upload;
-  assert.deepEqual(uploadNames, ['uploaded-a.png', 'invalid.png', 'uploaded-b.png', '课堂A.png']);
-  assert.equal(nodes.get('cutUploadInput').value, '');
-  assert.equal(nodes.get('cutImageGrid').children.length, 3);
-  assert(nodes.get('cutImageStatus').textContent.includes('已上传 3 张'));
-  assert(nodes.get('cutImageStatus').textContent.includes('覆盖同名 1 张'));
-  assert(nodes.get('cutImageStatus').textContent.includes('失败 1 张'));
-  let deletePayload, failedDeleteName = null;
-  responses['/api/images/delete'] = options => {
-    deletePayload = JSON.parse(options.body);
-    const deleted = deletePayload.filenames.filter(name => name !== failedDeleteName);
-    responses['/api/images'].images = responses['/api/images'].images.filter(image => !deleted.includes(image.filename));
-    return { deleted, missing: [], failed: failedDeleteName ? [{ item: failedDeleteName, detail: 'File busy' }] : [] };
-  };
-  const uploadedCard = nodes.get('cutImageGrid').children.find(card => card.innerHTML.includes('uploaded-a.png'));
-  const deleteButton = uploadedCard.children.find(child => child.className === 'del-btn');
-  const beforeCancel = calls.length;
-  allowImageDelete = false;
-  await deleteButton.events.click({ stopPropagation() {} });
-  assert.equal(calls.length, beforeCancel, '取消删除不得发送请求');
-  allowImageDelete = true;
-  await deleteButton.events.click({ stopPropagation() {} });
-  assert.deepEqual(deletePayload, { filenames: ['uploaded-a.png'] });
-  assert.equal(nodes.get('cutImageGrid').children.length, 2);
-  nodes.get('cutSelectAll').checked = true;
-  nodes.get('cutSelectAll').events.change({ target: nodes.get('cutSelectAll') });
-  failedDeleteName = '课堂A.png';
-  await nodes.get('cutDeleteSelected').events.click();
-  assert.deepEqual(deletePayload, { filenames: ['课堂A.png', 'uploaded-b.png'] });
-  assert.equal(nodes.get('cutImageGrid').children.length, 1);
-  assert.equal(nodes.get('cutSelectionCount').textContent, '已选 1 张');
-  assert.equal(nodes.get('cutDeleteSelected').disabled, false, '失败项保留选中以便重试');
-  assert(nodes.get('cutImageStatus').textContent.includes('失败 1 张'));
-  failedDeleteName = null;
-  await nodes.get('cutDeleteSelected').events.click();
-  assert.equal(nodes.get('cutSelectionCount').textContent, '已选 0 张');
-  assert.equal(nodes.get('cutSelectAll').disabled, true);
-  assert.equal(nodes.get('cutInfer').disabled, true);
-  assert(nodes.get('cutImageGrid').innerHTML.includes('暂无图片'));
-  assert.equal(nodes.get('cutHeadGrid').children.length, 1, '管理待切割图片不应清空已保存裁剪');
   assert.equal(nodes.has('globalBanner'), false);
   console.log('ES module startup, navigation and result viewer checks passed (15 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

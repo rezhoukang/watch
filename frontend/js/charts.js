@@ -1,4 +1,4 @@
-import { el, esc, api } from './core.js?v=81';
+import { el, esc, api } from './core.js?v=82';
 
 /* ==================== 推理结果库（data/outputs/）==================== */
 

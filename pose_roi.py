@@ -7,10 +7,11 @@ from project_paths import MODELS_DIR
 
 WEIGHTS = "yolov8m-worldv2.pt"
 PROMPTS = ["cell phone", "book"]
+DEFAULT_CONFIDENCE = 0.03
 RULE = {"version": "full_image_objects_v4", "weights": WEIGHTS, "prompts": PROMPTS,
         "roi_source": "pose_bbox",
         "association": "maximum_positive_intersection_area", "detection_scope": "full_image",
-        "confidence": 0.6, "imgsz": 640}
+        "confidence": DEFAULT_CONFIDENCE, "imgsz": 640}
 _lock = threading.RLock()
 _model: Any = None
 
@@ -67,7 +68,7 @@ def _iou(a, b) -> float:
     return overlap/union if union > 0 else 0.0
 
 
-def refine(frame, detections: list[dict], enabled: bool = True, confidence: float = 0.6,
+def refine(frame, detections: list[dict], enabled: bool = True, confidence: float = DEFAULT_CONFIDENCE,
            device: int | str = "cpu") -> None:
     """Mutate only head-down states; preserve the head evidence and person count."""
     if not math.isfinite(confidence) or not 0 <= confidence <= 1:

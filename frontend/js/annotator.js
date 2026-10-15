@@ -1,7 +1,7 @@
-import { el, esc, api, banner, showError } from './core.js?v=81';
-import { readDetectOptions } from './models.js?v=81';
-import { classColor, classColorA, createPoseLayer } from './viewer.js?v=81';
-import { loadDatasets } from './training.js?v=81';
+import { el, esc, api, banner, showError } from './core.js?v=82';
+import { readDetectOptions } from './models.js?v=82';
+import { classColor, classColorA, createPoseLayer } from './viewer.js?v=82';
+import { loadDatasets } from './training.js?v=82';
 
 /* ==================== 标注（全屏标注器）====================
  * 入口：训练页「标注数据」区选数据集 + Train/Val → 点缩略图进入全屏标注器。
@@ -547,9 +547,9 @@ el('annPrelabel').addEventListener('click', async () => {
   btn.disabled = true;
   annMsg('预标注中…（首次要加载模型，可能较慢）');
   try {
-    const { weights, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, isPose } = readDetectOptions('ann');
+    const { weights, conf, classes, headDetection, rtdetrBase, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, isPose } = readDetectOptions('ann');
     const q = new URLSearchParams({
-      conf: el('annConf').value || '0.38',
+      conf,
       weights,
       imgsz: '640',
     });

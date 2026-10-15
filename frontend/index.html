@@ -20,6 +20,7 @@
     <button class="tab" data-tab="video">视频推理</button>
     <button class="tab" data-tab="train">训练</button>
     <button class="tab" data-tab="dataset">数据集管理</button>
+    <button class="tab" data-tab="aggregate">聚合操作</button>
   </nav>
 
   <!-- ========== 上传 ========== -->
@@ -128,7 +129,7 @@
         <label>低头 R &lt; <input id="detHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="detHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
         <label>抬头 R &gt; <input id="detHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="detHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
         <label><input id="detPoseRoi" type="checkbox" checked>全图物体检测与关联（Pose框）</label>
-        <label>物体置信度 ≥ <input id="detRoiConfidence" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+        <label>物体置信度 ≥ <input id="detRoiConfidence" type="number" min="0" max="1" step="0.01" value="0.03"></label>
         <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
       </span>
       <label><input type="checkbox" id="detHeadDetection"> 目标检测</label>
@@ -216,7 +217,7 @@
         <label>低头 R &lt; <input id="vidHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="vidHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
         <label>抬头 R &gt; <input id="vidHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="vidHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
         <label><input id="vidPoseRoi" type="checkbox" checked>全图物体检测与关联（Pose框）</label>
-        <label>物体置信度 ≥ <input id="vidRoiConfidence" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+        <label>物体置信度 ≥ <input id="vidRoiConfidence" type="number" min="0" max="1" step="0.01" value="0.03"></label>
         <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
       </span>
       <label><input type="checkbox" id="vidHeadDetection"> 目标检测</label>
@@ -314,6 +315,42 @@
     </div>
   </section>
 
+  <!-- ========== 聚合操作（待推理图片 → 目标检测 → 人脸识别 → 姿势检测绑定）========== -->
+  <section class="panel" id="tab-aggregate">
+    <div class="toolbar">
+      <label>置信度 <input type="number" id="aggConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
+      <label>尺寸 imgsz <input type="number" id="aggImgsz" value="640" min="320" max="1920" step="32"></label>
+      <label>权重 <select id="aggWeights"></select></label>
+      <label title="仅 YOLO-World 权重生效：用文字指定要检测的目标">prompt <input type="text" id="aggClasses" value="" placeholder="person, 手机" size="22"></label>
+      <button class="btn small ghost" id="aggRefresh">刷新列表</button>
+    </div>
+    <div class="toolbar">
+      <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别</label>
+      <label>人脸置信度 ≥ <input type="number" id="aggFaceConfidence" value="0.5" min="0.01" max="0.99" step="0.05"></label>
+      <label>识别阈值 ≥ <input type="number" id="aggRecThreshold" value="0.4" min="0" max="1" step="0.01"></label>
+      <label><input type="checkbox" id="aggPose" checked> 姿势检测</label>
+      <label>姿势置信度 ≥ <input type="number" id="aggPoseConfidence" value="0.6" min="0.01" max="0.99" step="0.05"></label>
+      <label>绑定策略 <select id="aggBind">
+        <option value="iou">IoU 最大（≥ 阈值）</option>
+        <option value="contain">目标框包含姿势中心</option>
+        <option value="nearest">最近目标中心</option>
+      </select></label>
+      <label title="仅 IoU 策略生效：低于该值判为未绑定，宁可漏绑也不乱绑">绑定 IoU ≥ <input type="number" id="aggBindIou" value="0.3" min="0" max="1" step="0.05"></label>
+    </div>
+    <p class="hint">点击左侧图片依次运行：<b>目标检测</b> → <b>人脸识别</b>（识别到的姓名贴到最贴合的目标框上）→ <b>姿势检测</b>（按绑定策略与目标框绑定）。取消勾选即跳过对应步骤。</p>
+    <div class="split">
+      <div>
+        <h2>待推理图片</h2>
+        <div class="grid" id="aggImageGrid"></div>
+      </div>
+      <div>
+        <h2>聚合结果 <span class="subnav-status" id="aggResultName"></span></h2>
+        <p id="aggStatus" class="status" role="status"></p>
+        <div id="aggResult" class="result-box">点击左侧图片开始聚合：目标检测 → 人脸识别 → 姿势检测与绑定</div>
+      </div>
+    </div>
+  </section>
+
   <!-- ========== 全屏标注器 ========== -->
   <div class="annotator-mask" id="annotatorMask" hidden>
     <div class="annotator">
@@ -332,7 +369,7 @@
             <label>低头 R &lt; <input id="annHeadDownRSlider" aria-label="低头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.05"><input id="annHeadDownR" aria-label="低头R阈值" type="number" min="-1" max="1" step="0.01" value="0.05"></label>
             <label>抬头 R &gt; <input id="annHeadUpRSlider" aria-label="抬头R阈值滑块" type="range" min="-1" max="1" step="0.01" value="0.20"><input id="annHeadUpR" aria-label="抬头R阈值" type="number" min="-1" max="1" step="0.01" value="0.20"></label>
             <label><input id="annPoseRoi" type="checkbox" checked>全图物体检测与关联（Pose框）</label>
-            <label>物体置信度 ≥ <input id="annRoiConfidence" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+            <label>物体置信度 ≥ <input id="annRoiConfidence" type="number" min="0" max="1" step="0.01" value="0.03"></label>
             <span class="hint">两阈值之间（含边界）直接排除，举手优先；重新推理生效。</span>
           </span>
           <label><input type="checkbox" id="annHeadDetection"> 目标检测</label>
@@ -382,6 +419,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=81"></script>
+<script type="module" src="/app.js?v=82"></script>
 </body>
 </html>

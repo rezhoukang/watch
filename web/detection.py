@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/api/detect/image/{filename}", summary="推理图片")
 def detect_image(
     filename: str,
-    conf: float = 0.38,
+    conf: float | None = None,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
     imgsz: int = 640,
@@ -25,7 +25,7 @@ def detect_image(
     head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
     head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
     pose_roi: bool = True,
-    roi_confidence: float = Query(default=0.6, ge=0, le=1),
+    roi_confidence: float = Query(default=vision.DEFAULT_ROI_CONFIDENCE, ge=0, le=1),
 ) -> dict:
     common._validate_head_thresholds(head_down_r_threshold, head_up_r_threshold)
     if head_detection:
@@ -34,7 +34,7 @@ def detect_image(
     else:
         common._require_image_backend(weights)
 
-    conf = common._clamp_conf(conf)
+    conf = common._clamp_conf(vision.resolve_confidence(weights, conf))
     class_list = common._parse_classes(classes)
 
     src = common._safe_file(common.UPLOAD_DIR, filename)
@@ -80,7 +80,7 @@ def detect_image(
 @router.post("/api/detect/video/{filename}", summary="推理视频（后台任务）")
 def detect_video(
     filename: str,
-    conf: float = 0.38,
+    conf: float | None = None,
     stride: int = 1,
     weights: str = vision.DEFAULT_WEIGHTS,
     classes: str | None = None,
@@ -95,7 +95,7 @@ def detect_video(
     head_down_r_threshold: float = Query(default=0.05, ge=-1, le=1),
     head_up_r_threshold: float = Query(default=0.20, ge=-1, le=1),
     pose_roi: bool = True,
-    roi_confidence: float = Query(default=0.6, ge=0, le=1),
+    roi_confidence: float = Query(default=vision.DEFAULT_ROI_CONFIDENCE, ge=0, le=1),
 ) -> dict:
     common._validate_head_thresholds(head_down_r_threshold, head_up_r_threshold)
     if head_detection:
@@ -105,7 +105,7 @@ def detect_video(
 
     src = common._safe_file(common.VIDEO_DIR, filename)
     stride = max(1, min(stride, 30))
-    conf = common._clamp_conf(conf)
+    conf = common._clamp_conf(vision.resolve_confidence(weights, conf))
     class_list = common._parse_classes(classes)
 
     # 显示形式：'box' 框 / 'dot' 中心点；line_width 钳到 1~8

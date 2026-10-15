@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=81';
+import { el, api } from './core.js?v=82';
 
 /* ==================== 环境状态 ==================== */
 
@@ -8,6 +8,21 @@ let WORLD_WEIGHTS = [];   // 属于 YOLO-World 的权重文件名（由后端告
 let DEFAULT_WEIGHTS = 'medium.pt';   // 下拉框默认选中（后端 status 覆盖）
 let MODEL_LABELS = {};
 let RTDETR_STATUS = null;
+const poseConfidenceState = new Map();
+
+function syncPoseConfidence(prefix) {
+  if (el(`${prefix}HeadDetection`).checked) return;
+  const input = el(`${prefix}Conf`);
+  const isMediumPose = el(`${prefix}Weights`).value.toLowerCase() === 'yolov8m-pose.pt';
+  if (!poseConfidenceState.has(prefix)) {
+    poseConfidenceState.set(prefix, { active: false, pose: '0.6', other: input.value });
+  }
+  const state = poseConfidenceState.get(prefix);
+  if (state.active === isMediumPose) return;
+  if (isMediumPose) { state.other = input.value; input.value = state.pose; }
+  else { state.pose = input.value; input.value = state.other; }
+  state.active = isMediumPose;
+}
 
 /** 填充下拉框，并尽量保留原选择；无选择时用 preferred（默认权重） */
 function fillSelect(id, names, preferred = '') {
@@ -31,6 +46,7 @@ function fillSelect(id, names, preferred = '') {
 /** 只有 World 权重才需要填 prompt，普通 YOLO 的类别是权重内置的，直接隐藏输入框 */
 function syncModeUi(selId, wrapId) {
   const prefix = selId.replace('Weights', '');
+  syncPoseConfidence(prefix);
   el(`${prefix}PoseOptions`).hidden = el(`${prefix}HeadDetection`).checked || !el(selId).value.toLowerCase().includes('pose');
   if (el(`${prefix}HeadDetection`).checked) {
     el(wrapId).hidden = true;
@@ -103,6 +119,7 @@ el('annWeights').addEventListener('change', () =>
 function readDetectOptions(prefix) {
   const headDetection = !!el(`${prefix}HeadDetection`).checked;
   const weights = headDetection ? 'medium.pt' : el(`${prefix}Weights`).value || DEFAULT_WEIGHTS;
+  const conf = headDetection ? '0.45' : el(`${prefix}Conf`).value || (weights.toLowerCase() === 'yolov8m-pose.pt' ? '0.6' : '0.38');
   const isWorld = WORLD_WEIGHTS.includes(weights);
   const classes = !headDetection && isWorld ? el(`${prefix}Classes`).value.trim() : '';
   const mergeIou = headDetection ? Number(el(`${prefix}MergeIou`).value || '0.1') : 0;
@@ -110,13 +127,13 @@ function readDetectOptions(prefix) {
   const headDownRThreshold = Number(el(`${prefix}HeadDownR`).value || '0.05');
   const headUpRThreshold = Number(el(`${prefix}HeadUpR`).value || '0.20');
   const poseRoi = !!el(`${prefix}PoseRoi`).checked;
-  const roiConfidence = Number(el(`${prefix}RoiConfidence`).value || '0.6');
+  const roiConfidence = Number(el(`${prefix}RoiConfidence`).value || '0.03');
   if (!Number.isFinite(roiConfidence) || roiConfidence < 0 || roiConfidence > 1) throw new Error('物体置信度必须在 0 到 1 之间');
   if ([headDownRThreshold, headUpRThreshold].some(v => !Number.isFinite(v) || v < -1 || v > 1)) throw new Error('低头和抬头 R 阈值必须在 -1 到 1 之间');
   if (headDownRThreshold >= headUpRThreshold) throw new Error('低头 R 阈值必须小于抬头 R 阈值');
   if (!Number.isFinite(mergeIou) || mergeIou < 0 || mergeIou > 1) throw new Error('合并 IoU 阈值必须在 0 到 1 之间');
   if (!Number.isFinite(mergeConfidence) || mergeConfidence < 0 || mergeConfidence > 1) throw new Error('自定义 IoU 的置信度门槛必须在 0 到 1 之间');
-  return { weights, isWorld, classes, headDetection, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
+  return { weights, conf, isWorld, classes, headDetection, mergeIou, mergeConfidence, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, isPose: weights.toLowerCase().includes('pose'), rtdetrBase: headDetection && !!el(`${prefix}RtdetrBase`).checked, isRtdetr: weights === RTDETR_STATUS?.weight };
 }
 
 const previousHeadOptions = new Map();

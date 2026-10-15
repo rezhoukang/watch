@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 import rtdetrv4
+from pose_roi import DEFAULT_CONFIDENCE as DEFAULT_ROI_CONFIDENCE
 from dataset_store import (
     list_datasets,
     dataset_detail,
@@ -32,6 +33,15 @@ from project_paths import (
 )
 
 DEFAULT_WEIGHTS = "medium.pt"
+DEFAULT_CONFIDENCE = 0.38
+DEFAULT_POSE_CONFIDENCE = 0.6
+
+
+def resolve_confidence(weights: str, conf: float | None = None) -> float:
+    """Use model-specific defaults only when no confidence was supplied."""
+    if conf is not None:
+        return conf
+    return DEFAULT_POSE_CONFIDENCE if Path(weights).name.lower() == "yolov8m-pose.pt" else DEFAULT_CONFIDENCE
 
 # ---------- Windows 下让 OpenCV 能找到 OpenH264（H.264 编码）----------
 # 浏览器 <video> 只认 H.264 / VP9，OpenCV 默认的 mp4v 是 MPEG-4 Part 2 播不了。
@@ -237,12 +247,12 @@ def _clamp_imgsz(imgsz: int) -> int:
 def detect_image(
     src: Path,
     weights: str = DEFAULT_WEIGHTS,
-    conf: float = 0.38,
+    conf: float | None = None,
     classes: list[str] | None = None,
     imgsz: int = 640,
     save_result: bool = True,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
-    pose_roi: bool = True, roi_confidence: float = 0.6,
+    pose_roi: bool = True, roi_confidence: float = DEFAULT_ROI_CONFIDENCE,
 ) -> dict:
     """推理单张图片，保存带框结果，返回推理详情
 
@@ -251,6 +261,7 @@ def detect_image(
     save_result: False 时不写结果图（预标注用，避免污染 results/）
     """
     _ensure_dirs()
+    conf = resolve_confidence(weights, conf)
     size = _clamp_imgsz(imgsz)
     if rtdetrv4.is_weights(weights):
         return rtdetrv4.detect_image(src, conf, size, RESULTS_DIR, save_result=save_result)
@@ -379,7 +390,7 @@ def video_info(src: Path) -> dict | None:
 
 def _annotate_frame(
     frame, r: Any, render: str = "box", line_width: int = 2, head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
-    pose_roi: bool = True, roi_confidence: float = 0.6
+    pose_roi: bool = True, roi_confidence: float = DEFAULT_ROI_CONFIDENCE
 ) -> Any:
     """按选定的显示形式把推理结果画到帧上，返回可写入视频的 BGR 图
 
@@ -539,7 +550,7 @@ def _save_head_chart(
 def start_video_job(
     src: Path,
     weights: str = DEFAULT_WEIGHTS,
-    conf: float = 0.38,
+    conf: float | None = None,
     stride: int = 1,
     classes: list[str] | None = None,
     start: float = 0.0,
@@ -551,7 +562,7 @@ def start_video_job(
     merge_iou: float = 0.1,
     merge_confidence: float = 0.55,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
-    pose_roi: bool = True, roi_confidence: float = 0.6,
+    pose_roi: bool = True, roi_confidence: float = DEFAULT_ROI_CONFIDENCE,
 ) -> str:
     """启动视频推理后台任务，返回 job_id
 
@@ -561,6 +572,7 @@ def start_video_job(
     render: "box" 框 / "dot" 中心点（密集小目标用点更清晰）
     """
     _ensure_dirs()
+    conf = resolve_confidence(weights, conf)
     head_fusion_mod: Any = None
     if head_detection:
         import head_fusion
@@ -605,7 +617,7 @@ def _run_video_job(
     merge_iou: float = 0.1,
     merge_confidence: float = 0.55,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
-    pose_roi: bool = True, roi_confidence: float = 0.6,
+    pose_roi: bool = True, roi_confidence: float = DEFAULT_ROI_CONFIDENCE,
 ) -> None:
     job = JOBS[job_id]
     cap = None
@@ -801,11 +813,11 @@ def _run_video_job(
 def prelabel_image(
     img_path: Path,
     weights: str = DEFAULT_WEIGHTS,
-    conf: float = 0.38,
+    conf: float | None = None,
     classes: list[str] | None = None,
     imgsz: int = 640,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
-    pose_roi: bool = True, roi_confidence: float = 0.6,
+    pose_roi: bool = True, roi_confidence: float = DEFAULT_ROI_CONFIDENCE,
 ) -> list[dict]:
     """对单张图片做推理，返回可用作标注的框（原图像素 + 置信度）"""
     result = detect_image(

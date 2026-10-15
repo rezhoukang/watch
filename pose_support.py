@@ -15,7 +15,7 @@ KEYPOINT_CONFIDENCE = 0.5
 
 
 def metadata(head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
-             roi_enabled: bool = True, roi_confidence: float = 0.6) -> dict:
+             roi_enabled: bool = True, roi_confidence: float = pose_roi.DEFAULT_CONFIDENCE) -> dict:
     return {"keypoint_names": KEYPOINT_NAMES, "skeleton": SKELETON,
             "display_keypoints": DISPLAY_KEYPOINTS, "display_body": "upper",
             "hand_raise_rule": pose_behaviors.RULE,

@@ -1,9 +1,9 @@
-import { el, esc, api, banner, showError } from './core.js?v=81';
-import { readDetectOptions } from './models.js?v=81';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=81';
-import { switchSubPane } from './navigation.js?v=81';
-import { renderDetectResult } from './viewer.js?v=81';
-import { importBehaviorRecords } from './annotator.js?v=81';
+import { el, esc, api, banner, showError } from './core.js?v=82';
+import { readDetectOptions } from './models.js?v=82';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=82';
+import { switchSubPane } from './navigation.js?v=82';
+import { renderDetectResult } from './viewer.js?v=82';
+import { importBehaviorRecords } from './annotator.js?v=82';
 
 /* ==================== 图片推理 ==================== */
 
@@ -128,9 +128,8 @@ async function detectImage(filename) {
   try {
     // 1) 先取参数（元素缺失会被 catch 住并显示出来）
     const headDetection = !!el('detHeadDetection').checked;
-    const conf = headDetection ? '0.45' : el('detConf').value || '0.38';
     const imgsz = headDetection ? '640' : el('detImgsz').value || '640';
-    const { weights, isWorld, classes, isRtdetr, isPose, rtdetrBase, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
+    const { weights, conf, isWorld, classes, isRtdetr, isPose, rtdetrBase, headDownRThreshold, headUpRThreshold, poseRoi, roiConfidence, mergeIou = 0, mergeConfidence = 0 } = readDetectOptions('det');
     const modeText = headDetection ? `目标检测｜${rtdetrBase ? 'RT-DETRv4 0.25 基准 + medium 0.45 补齐' : 'medium 0.45 基准 + RT-DETRv4 0.25 补齐'}｜IoU ≤ ${mergeIou} 补齐` : isRtdetr ? 'RT-DETRv4-S C-RADIOv4｜人头计数' : isWorld
       ? `YOLO-World${classes ? `｜prompt「${classes}」` : '｜prompt=权重内置'}`
       : isPose ? 'YOLO Pose 人体骨架' : '普通 YOLO';

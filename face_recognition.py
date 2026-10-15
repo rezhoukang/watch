@@ -461,3 +461,96 @@ def recognize_face_image(image: np.ndarray, threshold: float = DEFAULT_MATCH_THR
         except Exception as exc:  # noqa: BLE001
             results.append({"status": "error", "message": str(exc), "matches": []})
     return {"status": "ok", "face_count": len(results), "faces": results}
+
+
+# ---------------------------------------------------------------- 整图 1:N（带人脸框）
+
+MAX_FACES = 50
+
+
+def recognize_faces(image: np.ndarray, threshold: float = DEFAULT_MATCH_THRESHOLD,
+                    detect_confidence: float = DETECT_CONFIDENCE,
+                    min_confidence: float = DEFAULT_QUALITY_CONFIDENCE,
+                    min_size: int = DEFAULT_MIN_FACE_PIXELS,
+                    min_sharpness: float = DEFAULT_MIN_SHARPNESS,
+                    max_faces: int = MAX_FACES) -> dict:
+    """在一张整图上检出所有人脸并做 1:N 识别，返回每张脸的整图坐标。
+
+    与 recognize_face_image 的区别：这里保留 bbox/landmarks，调用方可以按几何位置
+    把识别到的姓名贴到对应目标（人/物体）上；并且多张脸抢同一个库内编号时按
+    resolve_one_to_one 消解——一个库内编号最多只会分配给一张脸。
+
+    每张脸返回 status：
+    - matched   相似度 ≥ threshold 且抢到了该编号
+    - unknown   分数不足（reason=below_threshold）或编号被别人抢走（reason=taken）
+    - rejected  质量门槛未过（reasons 里给出原因）
+    - error     提特征/比对异常（message）
+    """
+    image = _to_bgr(image)
+    faces = _get_detector().detect(image, threshold=detect_confidence)
+    # 大脸优先：既是消解时的稳定顺序，也让 max_faces 截断先丢小脸
+    faces.sort(key=lambda f: (f["bbox"][2]-f["bbox"][0])*(f["bbox"][3]-f["bbox"][1]), reverse=True)
+
+    records: list[dict] = []
+    candidates_by_face: dict[str, list[dict]] = {}
+    for index, face in enumerate(faces[:max_faces], 1):
+        face_id = f"F{index:02d}"
+        x1, y1, x2, y2 = (float(v) for v in face["bbox"])
+        record = {
+            "face_id": face_id,
+            "bbox": [round(x1, 2), round(y1, 2), round(x2, 2), round(y2, 2)],
+            "confidence": round(float(face.get("confidence") or 0.0), 4),
+            "face_pixels": int(min(x2-x1, y2-y1)),
+            "landmarks": [[round(float(p[0]), 2), round(float(p[1]), 2)] for p in face["landmarks"]],
+            "status": "pending", "match": None, "reasons": [], "candidates": [],
+        }
+        records.append(record)
+        reasons, quality = assess_quality(image, face, min_size=min_size, min_sharpness=min_sharpness,
+                                        min_confidence=min_confidence)
+        record["quality"] = quality
+        if reasons:
+            record.update(status="rejected", reasons=reasons)
+            continue
+        try:
+            candidates = match_top_k(extract_embedding(image, face["landmarks"]), k=CANDIDATE_K)
+        except Exception as exc:  # noqa: BLE001
+            record.update(status="error", message=str(exc))
+            continue
+        record["candidates"] = candidates
+        candidates_by_face[face_id] = candidates
+
+    outcome = resolve_one_to_one(candidates_by_face, threshold)
+    reassigned = 0
+    for record in records:
+        result = outcome.get(record["face_id"])
+        if result is None:
+            continue  # rejected / error：没有参与分配
+        skipped = result["skipped"]
+        if skipped:
+            record["conflict"] = {"skipped": skipped}
+        assigned = result["assigned"]
+        if assigned:
+            rank = int(assigned["rank"])
+            reassigned += int(rank > 1)
+            record.update(status="matched", match={
+                "matched": True, "entry_id": assigned["entry_id"], "name": assigned.get("name"),
+                "similarity": assigned["similarity"], "photo_url": assigned.get("photo_url"), "rank": rank,
+            })
+            continue
+        top = (record["candidates"] or [{}])[0]
+        record.update(status="unknown", match={
+            "matched": False, "entry_id": top.get("entry_id"), "name": top.get("name"),
+            "similarity": top.get("similarity", 0.0), "photo_url": top.get("photo_url"),
+            # 被抢占（候选给了别人）与分数不足要能区分，界面才好解释
+            "reason": "taken" if skipped else "below_threshold",
+        })
+
+    statuses = [record["status"] for record in records]
+    return {
+        "status": "ok", "detected": len(faces), "truncated": max(0, len(faces)-max_faces),
+        "face_count": len(records), "reassigned": reassigned,
+        "matched": statuses.count("matched"), "unknown": statuses.count("unknown"),
+        "rejected": statuses.count("rejected"), "errors": statuses.count("error"),
+        "threshold": threshold, "detect_confidence": detect_confidence,
+        "faces": records,
+    }

@@ -44,7 +44,7 @@ class PoseRoiTests(unittest.TestCase):
 
     def test_low_confidence_and_outside_retain_head_down_missing_joints_allow_binding(self):
         people = [detection()]
-        self.run_refine(people, prediction((0, .59, [65, 115, 85, 135]),
+        self.run_refine(people, prediction((0, .029, [65, 115, 85, 135]),
                                           (2, .99, [65, 115, 85, 135]),
                                           (0, .95, [0, 140, 20, 150]),
                                           (1, .99, [210, 0, 250, 200])))
