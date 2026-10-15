@@ -11,7 +11,7 @@ BASE_CONFIDENCE = 0.45
 HEAD_CONFIDENCE = 0.25
 IMAGE_SIZE = 640
 DEFAULT_MERGE_IOU = 0.1
-DEFAULT_MERGE_CONFIDENCE = 0.45
+DEFAULT_MERGE_CONFIDENCE = 0.55
 
 
 def parameters(rtdetr_base: bool = False, merge_iou: float = DEFAULT_MERGE_IOU, merge_confidence: float = DEFAULT_MERGE_CONFIDENCE) -> dict:

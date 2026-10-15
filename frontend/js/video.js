@@ -1,8 +1,8 @@
-import { el, esc, api, banner, showError } from './core.js?v=69';
-import { readDetectOptions } from './models.js?v=69';
-import { pollJob } from './jobs.js?v=69';
-import { showHeadChart } from './charts.js?v=69';
-import { loadOutputs } from './outputs.js?v=69';
+import { el, esc, api, banner, showError } from './core.js?v=71';
+import { readDetectOptions } from './models.js?v=71';
+import { pollJob } from './jobs.js?v=71';
+import { showHeadChart } from './charts.js?v=71';
+import { loadOutputs } from './outputs.js?v=71';
 
 /* ==================== 视频推理 ==================== */
 

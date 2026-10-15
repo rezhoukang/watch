@@ -549,7 +549,7 @@ def start_video_job(
     head_detection: bool = False,
     rtdetr_base: bool = False,
     merge_iou: float = 0.1,
-    merge_confidence: float = 0.45,
+    merge_confidence: float = 0.55,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
     pose_roi: bool = True, roi_confidence: float = 0.6,
 ) -> str:
@@ -603,7 +603,7 @@ def _run_video_job(
     head_detection: bool = False,
     rtdetr_base: bool = False,
     merge_iou: float = 0.1,
-    merge_confidence: float = 0.45,
+    merge_confidence: float = 0.55,
     head_down_r_threshold: float = 0.05, head_up_r_threshold: float = 0.20,
     pose_roi: bool = True, roi_confidence: float = 0.6,
 ) -> None:

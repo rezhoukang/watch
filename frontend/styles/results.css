@@ -168,6 +168,53 @@
 .pose-layer svg { width: 100%; height: 100%; display: block; }
 .pose-layer line { stroke: #00bcd4; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .pose-layer circle { fill: #ff4081; }
+
+/* Head cutting keeps source selection and saved crops side by side. */
+.head-cut-layout { display: grid; grid-template-columns: minmax(280px, 1fr) minmax(400px, 1.7fr); gap: 22px; }
+.head-cut-layout h2 { margin-bottom: 12px; font-size: 18px; }
+.head-cut-layout .grid figure { cursor: pointer; position: relative; }
+#cutImageGrid {
+  align-content: start;
+  padding: 10px;
+  margin-top: 14px;
+  max-height: min(65vh, 720px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid #dde3ec;
+  border-radius: 10px;
+  background: #edf1f7;
+}
+.head-cut-select { position: absolute; top: 8px; left: 8px; background: white; padding: 4px; border-radius: 4px; }
+.head-cut-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.head-cut-controls select { max-width: 280px; }
+.head-cut-controls input, .head-cut-grid input { padding: 7px; border: 1px solid #dadce0; border-radius: 5px; max-width: 100%; }
+.head-cut-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(135px, 1fr));
+  align-content: start;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 10px;
+  max-height: min(65vh, 720px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid #dde3ec;
+  border-radius: 10px;
+  background: #edf1f7;
+}
+.head-cut-grid figure { background: white; border-radius: 8px; padding: 10px; margin: 0; overflow: hidden; }
+.head-cut-grid img { width: 100%; height: 140px; object-fit: contain; }
+.head-cut-grid figcaption { font-size: 12px; overflow-wrap: anywhere; line-height: 1.6; }
+.head-cut-grid label { display: flex; gap: 5px; align-items: center; margin-top: 8px; font-size: 12px; }
+.head-cut-grid input { width: 85px; }
+.head-cut-previews { display: flex; gap: 10px; overflow-x: auto; padding-top: 12px; }
+.head-cut-previews a { width: 130px; flex-shrink: 0; font-size: 11px; color: #3465a4; text-decoration: none; }
+.head-cut-previews img { width: 130px; height: 78px; object-fit: contain; background: white; }
+@media (max-width: 850px) { .head-cut-layout { grid-template-columns: 1fr; } }
 .history-merge { margin-bottom: 16px; }
 .merge-heading, .merge-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .merge-heading { justify-content: space-between; }

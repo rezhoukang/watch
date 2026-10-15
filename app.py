@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from web import common, status, media, history, detection, datasets, jobs
+from web import common, status, media, history, detection, datasets, jobs, head_cuts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,7 +24,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-for routes in (status, media, history, detection, datasets, jobs):
+for routes in (status, media, history, detection, datasets, jobs, head_cuts):
     app.include_router(routes.router)
 
 # Register the catch-all static mount after every API router.

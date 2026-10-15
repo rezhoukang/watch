@@ -26,6 +26,9 @@ venv/
 
 # 文件存储数据
 /data/
+/output/
+/head/
+/tmp/
 
 # 模型权重
 /models/

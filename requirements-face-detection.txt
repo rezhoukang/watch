@@ -1,0 +1,2 @@
+# Optional: anonymous face boxes, landmarks and aligned crops only.
+onnxruntime>=1.20

@@ -1,7 +1,7 @@
-import { el, esc, api, banner, showError } from './core.js?v=69';
-import { readDetectOptions } from './models.js?v=69';
-import { classColor, classColorA, createPoseLayer } from './viewer.js?v=69';
-import { loadDatasets } from './training.js?v=69';
+import { el, esc, api, banner, showError } from './core.js?v=71';
+import { readDetectOptions } from './models.js?v=71';
+import { classColor, classColorA, createPoseLayer } from './viewer.js?v=71';
+import { loadDatasets } from './training.js?v=71';
 
 /* ==================== 标注（全屏标注器）====================
  * 入口：训练页「标注数据」区选数据集 + Train/Val → 点缩略图进入全屏标注器。

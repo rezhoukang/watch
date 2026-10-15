@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=69';
+import { el, api } from './core.js?v=71';
 
 /* ==================== 环境状态 ==================== */
 
@@ -106,7 +106,7 @@ function readDetectOptions(prefix) {
   const isWorld = WORLD_WEIGHTS.includes(weights);
   const classes = !headDetection && isWorld ? el(`${prefix}Classes`).value.trim() : '';
   const mergeIou = headDetection ? Number(el(`${prefix}MergeIou`).value || '0.1') : 0;
-  const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || '0.45') : 0;
+  const mergeConfidence = headDetection ? Number(el(`${prefix}MergeConfidence`).value || '0.55') : 0;
   const headDownRThreshold = Number(el(`${prefix}HeadDownR`).value || '0.05');
   const headUpRThreshold = Number(el(`${prefix}HeadUpR`).value || '0.20');
   const poseRoi = !!el(`${prefix}PoseRoi`).checked;

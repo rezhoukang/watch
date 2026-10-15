@@ -1,11 +1,11 @@
-import { el } from './core.js?v=69';
-import { hideHoverPreview } from './preview.js?v=69';
+import { el } from './core.js?v=71';
+import { hideHoverPreview } from './preview.js?v=71';
 
 let loadHistory = () => {};
 
 /* ==================== 标签页切换 ==================== */
 
-function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid }) {
+function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts }) {
   loadHistory = loadInferenceHistory;
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
@@ -19,6 +19,7 @@ function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadData
       if (name !== 'detect') hideHoverPreview();
 
       if (name === 'detect') loadImages();
+      if (name === 'headcut') loadHeadCuts();
       if (name === 'video') loadVideos();
       // 训练页只要数据集下拉框；数据集管理页还要标注缩略图
       if (name === 'train') loadDatasets();

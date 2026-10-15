@@ -31,7 +31,7 @@ class ModuleIntegrationTests(unittest.TestCase):
                 from urllib.parse import urljoin
 
                 pending.append(urljoin(url, relative[0] or relative[1]))
-        self.assertEqual(len(visited), 14)
+        self.assertEqual(len(visited), 15)
         styles = client.get("/style.css")
         self.assertEqual(styles.status_code, 200)
         for relative in re.findall(r"url\('([^']+)'\)", styles.text):

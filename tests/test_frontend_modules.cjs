@@ -29,7 +29,7 @@ class Element {
 const root = path.resolve(__dirname, '../frontend');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1], new Element()]));
-const tabs = ['detect', 'video', 'train', 'dataset'].map((name) => {
+const tabs = ['detect', 'headcut', 'video', 'train', 'dataset'].map((name) => {
   const tab = new Element(); tab.dataset.tab = name; return tab;
 });
 const subtabs = ['images', 'result', 'history'].map((name) => {
@@ -40,6 +40,7 @@ const responses = {
   '/api/yolo/status': { message: 'ready', available: true, weights: ['test.pt'], default_weights: 'test.pt' },
   '/api/images': { images: [] }, '/api/videos': { videos: [], outputs: [] },
   '/api/inferences': { records: [] }, '/api/datasets': { datasets: [] },
+  '/api/head-cuts': { runs: [] },
 };
 const context = vm.createContext({
   console, setTimeout, clearTimeout, AbortController, URLSearchParams,
@@ -50,9 +51,9 @@ const context = vm.createContext({
     querySelectorAll: (selector) => selector === '.tab' ? tabs : selector === '.subtab' ? subtabs : [],
     body: new Element(),
   },
-  fetch: async (url) => {
+  fetch: async (url, options = {}) => {
     assert(Object.hasOwn(responses, url), `Unexpected request: ${url}`);
-    calls.push(url); return { ok: true, text: async () => JSON.stringify(responses[url]) };
+    calls.push(url); return { ok: true, text: async () => JSON.stringify(typeof responses[url] === 'function' ? responses[url](options) : responses[url]) };
   },
 });
 const modules = new Map();
@@ -75,7 +76,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     assert(match[1].endsWith(`?v=${styleVersion}`), `Stylesheet has stale asset version: ${match[1]}`);
   }
   await entry.evaluate(); await flush();
-  assert.equal(modules.size, 14);
+  assert.equal(modules.size, 15);
   assert(calls.includes('/api/yolo/status'));
   assert(calls.includes('/api/images'));
   assert(calls.includes('/api/videos'));
@@ -83,6 +84,32 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   for (const tab of subtabs) { await tab.events.click(); await flush(); }
   assert(calls.includes('/api/datasets'));
   assert(calls.includes('/api/inferences'));
+  assert(calls.includes('/api/head-cuts'));
+  const cutRunId = 'f'.repeat(32);
+  let cutStarted = false, cutPayload, markPayload;
+  responses['/api/images'] = { images: [{ filename: '课堂A.png', url: '/images/a.png' }] };
+  responses['/api/head-cuts'] = options => {
+    if (options.method === 'POST') { cutPayload = JSON.parse(options.body); cutStarted = true; return { run_id: cutRunId }; }
+    return { runs: cutStarted ? [{ run_id: cutRunId, created_at: '2026-10-15T00:00:00Z', crop_count: 1 }] : [] };
+  };
+  responses[`/api/head-cuts/${cutRunId}`] = {
+    run_id: cutRunId, status: 'done', progress: 1, total: 1, crop_count: 1, message: '完成', errors: [],
+    inputs: [{ filename: '课堂A.png' }], images: [{ source: '课堂A.png', crop_count: 1, annotated_file: 'annotated/001.png' }],
+    crops: [{ crop_id: 'HC001-001', source: '课堂A.png', class_name: 'head', confidence: .9,
+      crop_bbox: [1, 2, 3, 4], raw_file: 'crops/HC001-001.png', marked_file: 'marked/HC001-001.png', mark: '' }],
+  };
+  responses[`/api/head-cuts/${cutRunId}/marks`] = options => { markPayload = JSON.parse(options.body); return { ok: true }; };
+  await modules.get(path.join(root, 'js/head-cuts.js')).namespace.loadHeadCuts();
+  nodes.get('cutSelectAll').checked = true;
+  nodes.get('cutSelectAll').events.change({ target: nodes.get('cutSelectAll') });
+  assert.equal(nodes.get('cutInfer').disabled, false);
+  await nodes.get('cutInfer').events.click();
+  assert.deepEqual(cutPayload, { filenames: ['课堂A.png'], rtdetr_base: false, merge_iou: .1, merge_confidence: .55 });
+  assert.equal(nodes.get('cutHeadGrid').children.length, 1);
+  assert(nodes.get('cutHeadGrid').children[0].innerHTML.includes('HC001-001'));
+  const markInput = nodes.get('cutHeadGrid').children[0].children[0].children[0];
+  markInput.value = '已核对'; await markInput.events.change();
+  assert.deepEqual(markPayload, { marks: { 'HC001-001': '已核对' } });
   assert.equal(nodes.get('envStatus').className, 'badge ok');
   responses['/test-chart.json'] = { head_counts: [[100, 2], [150, 8], [200, 5]], fps: 25, start_frame: 100 };
   const player = nodes.get('videoResult').querySelector('video');
@@ -190,5 +217,5 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
   assert.equal(nodes.has('globalBanner'), false);
-  console.log('ES module startup, navigation and result viewer checks passed (14 modules, real HTML IDs).');
+  console.log('ES module startup, navigation and result viewer checks passed (15 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
