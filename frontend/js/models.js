@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=83';
+import { el, api } from './core.js?v=84';
 
 /* ==================== 环境状态 ==================== */
 
@@ -91,7 +91,6 @@ async function loadEnv() {
     fillSelect('vidWeights', s.video_weights || all, DEFAULT_WEIGHTS);
     fillSelect('trainWeights', all, DEFAULT_WEIGHTS); // 训练：全部权重（含 World，迁移起点与推理一致）
     fillSelect('annWeights', all, DEFAULT_WEIGHTS);   // 标注器：全部权重（与推理一致）
-    fillSelect('aggWeights', s.image_weights || all, s.default_image_weights || DEFAULT_WEIGHTS); // 聚合操作：图片权重
 
     syncModeUi('detWeights', 'detClassesWrap');
     syncModeUi('vidWeights', 'vidClassesWrap');

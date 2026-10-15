@@ -1,5 +1,5 @@
-import { el } from './core.js?v=83';
-import { hideHoverPreview } from './preview.js?v=83';
+import { el } from './core.js?v=84';
+import { hideHoverPreview } from './preview.js?v=84';
 
 let loadHistory = () => {};
 
@@ -28,7 +28,8 @@ function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadData
     });
   });
 
-  document.querySelectorAll('.subtab').forEach((t) => {
+  // 子标签只作用于自己所在的标签页：聚合操作有自己的子标签（switchAggregatePane）
+  document.querySelectorAll('#tab-detect .subtab').forEach((t) => {
     t.addEventListener('click', () => switchSubPane(t.dataset.sub || 'images'));
   });
 }
@@ -42,7 +43,7 @@ function switchSubPane(pane) {
   Object.entries(SUBTAB_PANES).forEach(([key, id]) => {
     el(id).classList.toggle('active', key === pane);
   });
-  document.querySelectorAll('.subtab').forEach((t) => {
+  document.querySelectorAll('#tab-detect .subtab').forEach((t) => {
     t.classList.toggle('active', t.dataset.sub === pane);
   });
   el('refreshImages').hidden = pane !== 'images';

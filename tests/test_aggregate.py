@@ -13,6 +13,7 @@ from ultralytics.engine.results import Results
 import aggregate
 import app
 import face_recognition
+import head_fusion
 import vision
 from web import common
 
@@ -28,11 +29,14 @@ def keypoints_of(offset: float = 0.0) -> list:
     return points
 
 
-def target_result() -> Results:
-    """目标检测：两个人框，不带骨架。"""
-    return Results(np.full((400, 640, 3), 255, dtype=np.uint8), path='people.png', names={0: 'person'},
-                   boxes=torch.tensor([[10, 10, 90, 200, .9, 0], [110, 10, 190, 200, .8, 0]],
-                                      dtype=torch.float32))
+def head_detections() -> dict:
+    """目标检测（沿用图片推理的目标检测）：medium 两个基准头 + RT-DETR 一个补齐头。"""
+    base = {"detections": [{"class_id": 0, "class_name": 'head', "confidence": .9, "bbox": [10, 10, 60, 70]},
+                           {"class_id": 0, "class_name": 'head', "confidence": .8, "bbox": [110, 10, 160, 70]}],
+            "classes_used": ['head']}
+    incoming = {"detections": [{"class_id": 0, "class_name": 'head', "confidence": .6, "bbox": [210, 10, 260, 70]}],
+                "classes_used": ['head']}
+    return head_fusion.fuse_results(base, incoming)
 
 
 def pose_result() -> Results:
@@ -41,78 +45,88 @@ def pose_result() -> Results:
     return Results(np.full((400, 640, 3), 255, dtype=np.uint8), path='people.png', names={0: 'person'},
                    boxes=torch.tensor([[10, 10, 90, 200, .9, 0], [110, 10, 190, 200, .8, 0]],
                                       dtype=torch.float32),
-                   keypoints=torch.tensor([[base, keypoints_of(100)]], dtype=torch.float32))
+                   keypoints=torch.tensor([base, keypoints_of(100)], dtype=torch.float32))
 
 
 class BindFacesTests(unittest.TestCase):
-    """姓名归属：先看谁包住人脸中心，都不包含时退化为最近目标中心。"""
+    """姓名归属：只保留 IoU > 0 的配对，链式贪心 + 一一对应。"""
 
     def setUp(self):
         self.targets = [
-            {"bbox": [0, 0, 100, 300], "class_name": 'person'},    # 大框
-            {"bbox": [10, 10, 60, 120], "class_name": 'phone'},    # 小框，更贴合
-            {"bbox": [400, 0, 500, 300], "class_name": 'person'},  # 远处
+            {"bbox": [0, 0, 100, 300], "class_name": 'head'},    # 大框
+            {"bbox": [10, 10, 60, 120], "class_name": 'head'},   # 小框（与脸重叠更多）
+            {"bbox": [400, 0, 500, 300], "class_name": 'head'},  # 远处
         ]
 
     def bind(self, bbox):
         faces = [{"face_id": 'F01', "bbox": bbox}]
         return aggregate.bind_faces(faces, self.targets).get('F01')
 
-    def test_smallest_containing_target_wins(self):
+    def test_highest_overlap_wins(self):
         binding = self.bind([20, 20, 50, 60])
         self.assertEqual(binding['target_index'], 1)
-        self.assertEqual(binding['strategy'], 'center_inside')
-        self.assertEqual(binding['iou'], 100*100/(40*150*2-100*100+100*100*0))  # 占位：见下方断言
         self.assertAlmostEqual(binding['iou'], aggregate.iou([20, 20, 50, 60], [10, 10, 60, 120]), places=4)
 
-    def test_face_outside_all_targets_snaps_to_nearest_center(self):
-        binding = self.bind([300, 100, 330, 140])
-        self.assertEqual(binding['target_index'], 2)
-        self.assertEqual(binding['strategy'], 'nearest_center')
-        self.assertGreater(binding['distance'], 0)
-
-    def test_far_away_face_is_not_bound(self):
+    def test_face_without_overlap_is_not_bound(self):
+        self.assertIsNone(self.bind([300, 100, 330, 140]))   # 离得近但不重叠 → 不硬塞
         self.assertIsNone(self.bind([1000, 900, 1040, 960]))
+
+    def test_one_to_one_never_puts_two_faces_on_one_head(self):
+        # 两张脸完全重合（同分同距，按传入顺序先到先得）而只有一个人头 → 只能贴一个
+        targets = [{"bbox": [10, 10, 60, 120], "class_name": 'head'}]
+        faces = [{"face_id": 'F01', "bbox": [20, 20, 50, 60]}, {"face_id": 'F02', "bbox": [20, 20, 50, 60]}]
+        bound = aggregate.bind_faces(faces, targets)
+        self.assertEqual(list(bound), ['F01'])
+        self.assertEqual(bound['F01']['target_index'], 0)
+
+    def test_two_faces_take_two_different_heads(self):
+        bound = aggregate.bind_faces(
+            [{"face_id": 'F01', "bbox": [20, 20, 50, 60]}, {"face_id": 'F02', "bbox": [22, 22, 52, 62]}],
+            self.targets)
+        self.assertEqual(len(bound), 2)
+        self.assertEqual({item['target_index'] for item in bound.values()}, {0, 1})
 
     def test_no_targets_means_no_binding(self):
         self.assertEqual(aggregate.bind_faces([{"face_id": 'F01', "bbox": [1, 2, 3, 4]}], []), {})
 
 
 class BindPosesTests(unittest.TestCase):
-    """姿势绑定：三种策略都必须能解释“为什么绑给这个目标、为什么没绑”。"""
+    """姿势绑定：只保留 IoU > 0 的配对，链式贪心 + 一一对应（IoU 并列时取中心距离近的）。"""
 
     def setUp(self):
         self.targets = [{"bbox": [0, 0, 100, 200]}, {"bbox": [300, 0, 400, 200]}]
-        self.poses = [{"bbox": [5, 5, 95, 195]}, {"bbox": [1000, 1000, 1010, 1010]}]
 
-    def test_iou_strategy_needs_threshold(self):
-        bound = aggregate.bind_poses(self.poses, self.targets, 'iou', .5)
+    def test_person_box_containing_a_head_binds_by_iou(self):
+        bound = aggregate.bind_poses([{"bbox": [5, 5, 95, 195]}], self.targets)
         self.assertEqual(bound[0]['target_index'], 0)
-        self.assertGreaterEqual(bound[0]['iou'], .5)
-        self.assertNotIn(1, bound)  # 离得远 → 未绑定，而不是硬塞给某个目标
+        self.assertGreater(bound[0]['iou'], 0)
 
-    def test_iou_threshold_can_reject_everything(self):
-        self.assertEqual(aggregate.bind_poses(self.poses, self.targets, 'iou', .99), {})
+    def test_pose_without_overlap_stays_unbound(self):
+        self.assertEqual(aggregate.bind_poses([{"bbox": [1000, 1000, 1010, 1010]}], self.targets), {})
 
-    def test_contain_strategy_uses_smallest_containing_box(self):
+    def test_highest_iou_wins_even_if_not_the_first_target(self):
         targets = [{"bbox": [0, 0, 400, 400]}, {"bbox": [10, 10, 60, 120]}]
-        bound = aggregate.bind_poses([{"bbox": [20, 20, 50, 60]}], targets, 'contain')
+        bound = aggregate.bind_poses([{"bbox": [20, 20, 50, 60]}], targets)
         self.assertEqual(bound[0]['target_index'], 1)
 
-    def test_contain_strategy_skips_center_outside(self):
-        self.assertEqual(aggregate.bind_poses([{"bbox": [500, 500, 520, 520]}], self.targets, 'contain'), {})
+    def test_one_to_one_never_reuses_a_head(self):
+        targets = [{"bbox": [0, 0, 100, 200]}]
+        bound = aggregate.bind_poses([{"bbox": [0, 0, 100, 200]}, {"bbox": [0, 0, 100, 50]}], targets)
+        self.assertEqual(list(bound), [0], '只有 IoU 更大的那个绑上，人头不会被重复占用')
+        self.assertEqual(bound[0]['iou'], 1.0)
+        self.assertNotIn(1, bound)
 
-    def test_nearest_strategy_always_binds_when_targets_exist(self):
-        bound = aggregate.bind_poses(self.poses, self.targets, 'nearest')
-        self.assertEqual(bound[0]['target_index'], 0)
-        self.assertEqual(bound[1]['target_index'], 1)
-        self.assertGreater(bound[1]['distance'], bound[0]['distance'])
+    def test_equal_iou_falls_back_to_the_nearer_center(self):
+        # 两个人头面积相同且都被姿势框包住 → IoU 相等，按中心距离近的优先
+        targets = [{"bbox": [0, 0, 50, 50]}, {"bbox": [10, 10, 60, 60]}]
+        pose = [{"bbox": [0, 0, 100, 100]}]
+        self.assertAlmostEqual(aggregate.iou(pose[0]['bbox'], targets[0]['bbox']),
+                               aggregate.iou(pose[0]['bbox'], targets[1]['bbox']), places=5)
+        self.assertEqual(aggregate.bind_poses(pose, targets)[0]['target_index'], 1)
 
-    def test_unknown_strategy_and_bad_threshold_are_rejected(self):
-        with self.assertRaises(ValueError):
-            aggregate.bind_poses(self.poses, self.targets, 'bogus')
-        with self.assertRaises(ValueError):
-            aggregate.bind_poses(self.poses, self.targets, 'iou', 1.5)
+    def test_malformed_or_missing_boxes_are_skipped(self):
+        self.assertEqual(aggregate.bind_poses([{"bbox": [1, 2, 3]}], self.targets), {})
+        self.assertEqual(aggregate.bind_poses([{}], self.targets), {})
 
 
 class RecognizeFacesTests(unittest.TestCase):
@@ -125,19 +139,23 @@ class RecognizeFacesTests(unittest.TestCase):
         ]
         detector = Mock()
         detector.detect.return_value = self.faces
-        for module, field, value in (
-            (face_recognition, '_get_detector', lambda: detector),
-            (face_recognition, 'assess_quality', Mock(return_value=([], {'sharpness': 100}))),
-            (face_recognition, 'extract_embedding', Mock(return_value=np.ones(512, dtype=np.float32))),
-            (face_recognition, 'list_entries', Mock(return_value=[{'id': '0001', 'name': '张三'}])),
-            (face_recognition, '_load_entries', Mock(return_value={'0001': {'name': '张三'}})),
-            (face_recognition, '_load_embeddings', Mock(return_value((['0001'], np.ones((1, 512), dtype=np.float32)))),
-        ):
-            mocked = patch.object(module, field, Mock(side_effect=value) if callable(value) and field == '_get_detector' else value)
-            mocked.start(); self.addCleanup(mocked.stop)
+        self.patch('_get_detector', Mock(return_value=detector))
+        self.patch('assess_quality', Mock(return_value=([], {'sharpness': 100})))
+        self.patch('extract_embedding', Mock(return_value=np.ones(512, dtype=np.float32)))
+        self.patch('_load_entries', Mock(return_value={'0001': {'name': '张三'}}))
+        self.patch('_load_embeddings', Mock(return_value=(['0001'], np.ones((1, 512), dtype=np.float32))))
+
+    def patch(self, name: str, value) -> None:
+        """打补丁并登记还原，避免 Mock 泄漏到同进程里的其他测试文件。"""
+        mocked = patch.object(face_recognition, name, value)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
+    def candidates(self, similarity: float = .62) -> None:
+        self.patch('match_top_k', Mock(return_value=[{'entry_id': '0001', 'name': '张三', 'similarity': similarity}]))
 
     def test_big_face_wins_duplicate_identity_and_small_one_is_recorded_as_taken(self):
-        face_recognition.match_top_k = Mock(return_value=[{'entry_id': '0001', 'name': '张三', 'similarity': .62}])
+        self.candidates()
         result = face_recognition.recognize_faces(np.full((400, 400, 3), 255, dtype=np.uint8), threshold=.4)
         self.assertEqual([f['face_id'] for f in result['faces']], ['F01', 'F02'])
         self.assertEqual(result['faces'][0]['status'], 'matched')
@@ -149,14 +167,14 @@ class RecognizeFacesTests(unittest.TestCase):
         self.assertEqual(result['reassigned'], 0)
 
     def test_below_threshold_is_distinguishable_from_taken(self):
-        face_recognition.match_top_k = Mock(return_value=[{'entry_id': '0001', 'name': '张三', 'similarity': .62}])
+        self.candidates()
         result = face_recognition.recognize_faces(np.full((400, 400, 3), 255, dtype=np.uint8), threshold=.9)
-        self.assertEqual(result['faces'][0]['status'], 'unknown')
-        self.assertEqual(result['faces'][0]['match']['reason'], 'below_threshold')
-        self.assertEqual(result['faces'][1]['match']['reason'], 'below_threshold')
+        self.assertEqual([f['status'] for f in result['faces']], ['unknown', 'unknown'])
+        self.assertEqual({f['match']['reason'] for f in result['faces']}, {'below_threshold'})
 
     def test_quality_gate_keeps_boxes_for_traceability(self):
-        face_recognition.assess_quality = Mock(return_value=(['原始人脸尺寸过小'], {'sharpness': 1}))
+        self.candidates()
+        self.patch('assess_quality', Mock(return_value=(['原始人脸尺寸过小'], {'sharpness': 1})))
         result = face_recognition.recognize_faces(np.full((400, 400, 3), 255, dtype=np.uint8))
         self.assertEqual([f['status'] for f in result['faces']], ['rejected', 'rejected'])
         self.assertEqual(result['faces'][0]['bbox'], [10, 10, 60, 80])
@@ -165,7 +183,7 @@ class RecognizeFacesTests(unittest.TestCase):
 
 
 class AggregateApiTests(unittest.TestCase):
-    """HTTP 端到端：目标检测 → 人脸识别贴名 → 姿势绑定，两步可分别跳过。"""
+    """HTTP 端到端：人头检测 → 人脸识别贴名 → 姿势绑定，后两步可分别跳过。"""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -173,26 +191,33 @@ class AggregateApiTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / 'uploads').mkdir()
         Image.new('RGB', (640, 400), 'white').save(self.root / 'uploads' / 'people.png')
-        self.targets_model, self.pose_model = Mock(), Mock()
-        self.targets_model.predict.return_value = [target_result()]
+        self.pose_model = Mock()
         self.pose_model.predict.return_value = [pose_result()]
+        self.detection = Mock(return_value=head_detections())
+        self.recognition = Mock(return_value=self.recognized())
         for module, field, value in (
             (common, 'UPLOAD_DIR', self.root / 'uploads'),
             (aggregate, 'RESULT_DIR', self.root / 'aggregate'),
-            (common, '_require_image_backend', Mock()),
+            (common, '_require_head_detection', Mock()),
+            (head_fusion, 'detect_image', self.detection),
             (face_recognition, 'list_entries', Mock(return_value=[{'id': '0001', 'name': '张三'}])),
-            (face_recognition, 'recognize_faces', Mock(return_value=self.recognized())),
+            (face_recognition, 'recognize_faces', self.recognition),
         ):
             mocked = patch.object(module, field, value); mocked.start(); self.addCleanup(mocked.stop)
-        model = patch.object(vision, 'get_model',
-                             lambda weights, classes=None: self.pose_model if 'pose' in weights else self.targets_model)
+        model = patch.object(vision, 'get_model', lambda weights, classes=None: self.pose_model)
         model.start(); self.addCleanup(model.stop)
         self.client = TestClient(app.app)
 
+    def patch(self, name: str, value) -> None:
+        """打补丁并登记还原，避免 Mock 泄漏给同类里的后续用例。"""
+        mocked = patch.object(face_recognition, name, value)
+        mocked.start()
+        self.addCleanup(mocked.stop)
+
     @staticmethod
-    def recognized() -> dict:
-        face = {"face_id": 'F01', "bbox": [30, 20, 60, 55], "confidence": .9, "face_pixels": 30,
-                "landmarks": [[35, 30], [50, 30], [42, 40], [36, 48], [52, 48]], "status": 'matched',
+    def recognized(bbox=None) -> dict:
+        face = {"face_id": 'F01', "bbox": bbox or [30, 25, 50, 55], "confidence": .9, "face_pixels": 20,
+                "landmarks": [[35, 33], [45, 33], [40, 41], [36, 48], [44, 48]], "status": 'matched',
                 "reasons": [], "candidates": [], "photo_url": None,
                 "match": {"matched": True, "entry_id": '0001', "name": '张三', "similarity": .62,
                           "photo_url": "/api/face-library/0001/photo", "rank": 1}}
@@ -201,34 +226,49 @@ class AggregateApiTests(unittest.TestCase):
                 "detect_confidence": .5, "faces": [face]}
 
     def post(self, **overrides):
-        payload = {"weights": 'medium.pt', "confidence": .38, "imgsz": 640}
-        payload.update(overrides)
-        return self.client.post('/api/aggregate/image/people.png', json=payload)
+        return self.client.post('/api/aggregate/image/people.png', json=overrides)
 
-    def test_names_are_attached_to_the_target_and_poses_are_bound(self):
+    def test_target_detection_is_locked_to_image_inference_settings(self):
+        record = self.post().json()
+        # 前端不再传目标检测参数：后端固定 medium.pt 0.45 基准 + RT-DETRv4 0.25 补齐，IoU 规则锁死
+        self.assertEqual(self.detection.call_args.kwargs,
+                         {'rtdetr_base': False, 'merge_iou': .1, 'merge_confidence': .55})
+        self.assertEqual(record['steps']['detect']['mode'], 'head_fusion')
+        self.assertIn('合并 IoU ≤ 0.1', record['steps']['detect']['rule'])
+        self.assertIn('自定义 IoU 生效置信度 > 0.55', record['steps']['detect']['rule'])
+
+    def test_stale_target_detection_params_are_ignored(self):
+        record = self.post(weights='yolov8m-pose.pt', confidence=.9, imgsz=1280,
+                           classes='book').json()
+        self.assertEqual(self.detection.call_args.kwargs['merge_iou'], .1)
+        self.assertEqual(record['count'], 3)
+
+    def test_names_are_attached_to_the_head_and_poses_are_bound(self):
         response = self.post()
         self.assertEqual(response.status_code, 200, response.text)
         record = response.json()
-        self.assertEqual(record['count'], 2)
-        # 人脸中心 (45, 37.5) 落在第一个目标框内 → 姓名贴到它，第二个目标不受影响
+        self.assertEqual(record['count'], 3)
+        # 人脸中心 (40, 40) 落在第一个人头框内 → 姓名贴到它，其他人头不受影响
         self.assertEqual(record['targets'][0]['name'], '张三')
         self.assertEqual(record['targets'][0]['similarity'], .62)
         self.assertEqual(record['targets'][0]['face_id'], 'F01')
         self.assertNotIn('name', record['targets'][1])
         self.assertEqual(record['faces'][0]['target_index'], 0)
         self.assertEqual(record['summary']['named_targets'], 1)
-        # 两个姿势框都套在对应的目标框上 → 全部绑定，并记录绑定依据
+        self.assertEqual(record['summary']['bound_faces'], 1)
+        # 两个人头中心分别落在各自的 Pose 人体框内 → 默认策略（contain）全部绑定
         self.assertEqual([pose['target_index'] for pose in record['poses']], [0, 1])
         self.assertEqual(record['steps']['pose']['bound'], 2)
         self.assertEqual(record['summary']['bound_poses'], 2)
-        self.assertEqual(record['targets'][0]['poses'][0]['bind']['strategy'], 'iou')
-        self.assertIn('低头', (record['targets'][0]['poses'][0]['behavior']['state'],
-                              record['targets'][0]['poses'][0]['behavior']['state']))
-        # 三步都要有各自的配置与耗时，便于界面解释
-        self.assertEqual(record['steps']['detect']['weight'], 'medium.pt')
+        self.assertEqual(record['targets'][0]['poses'][0]['bind']['iou'], .1974)
+        self.assertIn(record['targets'][0]['poses'][0]['behavior']['state'], ('低头', '抬头', '无法判断'))
+        # 三步都要有各自的统计与耗时，便于界面解释
+        self.assertEqual(record['steps']['detect']['count'], 3)
         self.assertEqual(record['steps']['face']['threshold'], .4)
         self.assertEqual(record['steps']['face']['library_count'], 1)
-        self.assertGreater(record['steps']['detect']['elapsed_seconds'], 0)
+        self.assertEqual(record['steps']['pose']['weight'], 'yolov8m-pose.pt')
+        for step in ('detect', 'face', 'pose'):
+            self.assertIn('elapsed_seconds', record['steps'][step], '每步都要报耗时，界面才好解释')
         # 结果图要落地且能通过接口取回
         self.assertTrue((aggregate.RESULT_DIR / record['result']).is_file())
         image = self.client.get(record['result_url'])
@@ -237,60 +277,69 @@ class AggregateApiTests(unittest.TestCase):
 
     def test_unchecked_steps_are_skipped_and_reported(self):
         record = self.post(face=False, pose=False).json()
-        self.assertEqual(record['count'], 2)
+        self.assertEqual(record['count'], 3)
         self.assertFalse(record['steps']['face']['enabled'])
         self.assertFalse(record['steps']['pose']['enabled'])
         self.assertEqual(record['faces'], [])
         self.assertEqual(record['poses'], [])
         self.assertTrue(all('name' not in target for target in record['targets']))
-        # 跳过姿势检测时不该再加载 Pose 权重
+        # 跳过姿势检测时不该再加载 Pose 权重，也不该去读人脸库
         self.assertEqual(self.pose_model.predict.call_count, 0)
+        self.assertEqual(self.recognition.call_count, 0)
 
-    def test_pose_keypoints_are_reused_when_detection_weight_is_a_pose_model(self):
-        record = self.post(weights='yolov8m-pose.pt', confidence=None).json()
-        self.assertEqual(record['steps']['pose']['keypoints_source'], 'detect_weight')
-        self.assertEqual(record['steps']['pose']['weight'], 'yolov8m-pose.pt')
-        self.assertEqual(self.pose_model.predict.call_count, 0)
-        self.assertEqual(self.targets_model.predict.call_args.kwargs['conf'], .6)  # Pose 权重默认置信度
-        self.assertEqual(record['poses'][0]['source'], 'detect_weight')
-
-    def test_pose_model_runs_when_detection_weight_has_no_keypoints(self):
+    def test_pose_keypoints_come_from_the_pose_model(self):
         record = self.post().json()
-        self.assertEqual(record['steps']['pose']['keypoints_source'], 'pose_model')
         self.assertEqual(self.pose_model.predict.call_count, 1)
-        self.assertEqual(record['steps']['pose']['weight'], 'yolov8m-pose.pt')
+        self.assertEqual(self.pose_model.predict.call_args.kwargs['conf'], .6)
+        self.assertEqual(len(record['poses'][0]['keypoints']), 17)
 
     def test_unbound_pose_is_listed_instead_of_silently_dropped(self):
         far = Results(np.full((400, 640, 3), 255, dtype=np.uint8), path='people.png', names={0: 'person'},
                       boxes=torch.tensor([[600, 380, 639, 399, .9, 0]], dtype=torch.float32),
-                      keypoints=torch.tensor([[keypoints_of()]], dtype=torch.float32))
+                      keypoints=torch.tensor([keypoints_of()], dtype=torch.float32))
         self.pose_model.predict.return_value = [far]
         record = self.post().json()
         self.assertEqual(record['unbound_poses'], [1])
         self.assertEqual(record['steps']['pose']['bound'], 0)
 
+    def test_face_outside_every_head_is_reported_as_unbound(self):
+        self.patch('recognize_faces', Mock(return_value=self.recognized(bbox=[600, 380, 630, 399])))
+        record = self.post().json()
+        self.assertEqual(record['unbound_faces'], ['F01'])
+        self.assertIsNone(record['faces'][0]['target_index'])
+        self.assertEqual(record['summary']['named_targets'], 0)
+
+    def test_binding_rule_is_fixed_and_reported(self):
+        record = self.post().json()
+        self.assertEqual(record['steps']['pose']['min_iou'], 0)
+        self.assertIn('链式贪心', record['bind']['rule'])
+        self.assertIn('IoU > 0', record['bind']['rule'])
+        self.assertIn('链式贪心', record['bind']['face_rule'])
+        # 人头框与人体框的 IoU 很小（≈0.2），但只要 > 0 就该绑上
+        self.assertLess(record['steps']['pose']['bound'] and record['targets'][0]['poses'][0]['bind']['iou'], .3)
+
     def test_empty_library_is_reported(self):
-        face_recognition.list_entries = Mock(return_value=[])
+        # 直接赋值会泄漏给同类里的后续用例（后面几个都要求人脸识别可用），必须登记还原
+        self.patch('list_entries', Mock(return_value=[]))
         response = self.post()
         self.assertEqual(response.status_code, 400)
         self.assertIn('人脸库为空', response.json()['detail'])
-
-    def test_empty_library_is_fine_when_face_step_is_skipped(self):
-        face_recognition.list_entries = Mock(return_value=[])
         self.assertEqual(self.post(face=False).status_code, 200)
 
-    def test_unknown_bind_strategy_is_rejected(self):
-        response = self.post(bind='bogus')
-        self.assertEqual(response.status_code, 400)
-        self.assertIn('未知的绑定策略', response.json()['detail'])
+    def test_unknown_extra_fields_are_ignored(self):
+        # 绑定规则已固定：前端误传 bind / bind_iou 不再是一个开关，只是被忽略
+        record = self.post(bind='bogus', bind_iou=1.5, weights='yolov8m.pt').json()
+        self.assertIn('链式贪心', record['bind']['rule'])
+        self.assertEqual(record['steps']['pose']['min_iou'], 0)
 
     def test_out_of_range_parameters_are_rejected(self):
-        for bad in ({'bind_iou': 1.5}, {'threshold': 2}, {'imgsz': 100}, {'pose_confidence': 0}):
+        for bad in ({'threshold': 2}, {'pose_confidence': 0}, {'face_confidence': 3}):
             response = self.post(**bad)
             self.assertEqual(response.status_code, 422, f'{bad} 应被拒绝：{response.text}')
 
-    def test_missing_image_returns_404(self):
+    def test_missing_and_illegal_filenames_are_rejected(self):
         self.assertEqual(self.client.post('/api/aggregate/image/none.png', json={}).status_code, 404)
+        self.assertEqual(self.client.post('/api/aggregate/image/a..b.png', json={}).status_code, 400)
 
 
 if __name__ == '__main__':

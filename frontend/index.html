@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=53">
+<link rel="stylesheet" href="/style.css?v=54">
 </head>
 <body>
 <div class="app">
@@ -318,36 +318,30 @@
   <!-- ========== 聚合操作（待推理图片 → 目标检测 → 人脸识别 → 姿势检测绑定）========== -->
   <section class="panel" id="tab-aggregate">
     <div class="toolbar">
-      <label>置信度 <input type="number" id="aggConf" value="0.38" min="0.01" max="0.99" step="0.05"></label>
-      <label>尺寸 imgsz <input type="number" id="aggImgsz" value="640" min="320" max="1920" step="32"></label>
-      <label>权重 <select id="aggWeights"></select></label>
-      <label title="仅 YOLO-World 权重生效：用文字指定要检测的目标">prompt <input type="text" id="aggClasses" value="" placeholder="person, 手机" size="22"></label>
-      <button class="btn small ghost" id="aggRefresh">刷新列表</button>
-    </div>
-    <div class="toolbar">
       <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别</label>
       <label>人脸置信度 ≥ <input type="number" id="aggFaceConfidence" value="0.5" min="0.01" max="0.99" step="0.05"></label>
       <label>识别阈值 ≥ <input type="number" id="aggRecThreshold" value="0.4" min="0" max="1" step="0.01"></label>
       <label><input type="checkbox" id="aggPose" checked> 姿势检测</label>
       <label>姿势置信度 ≥ <input type="number" id="aggPoseConfidence" value="0.6" min="0.01" max="0.99" step="0.05"></label>
-      <label>绑定策略 <select id="aggBind">
-        <option value="iou">IoU 最大（≥ 阈值）</option>
-        <option value="contain">目标框包含姿势中心</option>
-        <option value="nearest">最近目标中心</option>
-      </select></label>
-      <label title="仅 IoU 策略生效：低于该值判为未绑定，宁可漏绑也不乱绑">绑定 IoU ≥ <input type="number" id="aggBindIou" value="0.3" min="0" max="1" step="0.05"></label>
     </div>
-    <p class="hint">点击左侧图片依次运行：<b>目标检测</b> → <b>人脸识别</b>（识别到的姓名贴到最贴合的目标框上）→ <b>姿势检测</b>（按绑定策略与目标框绑定）。取消勾选即跳过对应步骤。</p>
-    <div class="split">
-      <div>
-        <h2>待推理图片</h2>
-        <div class="grid" id="aggImageGrid"></div>
+    <p class="hint">目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.55（已锁死，前端不开放）。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
+
+    <nav class="subnav">
+      <button class="subtab active" data-agg="images">待推理图片</button>
+      <button class="subtab" data-agg="result">聚合结果</button>
+      <div class="subnav-right">
+        <span class="subnav-status" id="aggResultName"></span>
+        <button class="btn small ghost" id="aggRefresh">刷新列表</button>
       </div>
-      <div>
-        <h2>聚合结果 <span class="subnav-status" id="aggResultName"></span></h2>
-        <p id="aggStatus" class="status" role="status"></p>
-        <div id="aggResult" class="result-box">点击左侧图片开始聚合：目标检测 → 人脸识别 → 姿势检测与绑定</div>
-      </div>
+    </nav>
+
+    <div class="subpanel active" id="aggregate-pane-images">
+      <div class="grid" id="aggImageGrid"></div>
+    </div>
+
+    <div class="subpanel" id="aggregate-pane-result">
+      <p id="aggStatus" class="status" role="status"></p>
+      <div id="aggResult" class="result-box">点击「待推理图片」里的图片开始聚合：目标检测 → 人脸识别 → 姿势检测与绑定</div>
     </div>
   </section>
 
@@ -419,6 +413,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=83"></script>
+<script type="module" src="/app.js?v=84"></script>
 </body>
 </html>

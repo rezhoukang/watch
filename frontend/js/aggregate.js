@@ -1,89 +1,194 @@
-import { el, esc, api, showError } from './core.js?v=83';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=83';
+import { el, esc, api, showError } from './core.js?v=84';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=84';
+import { classColor } from './viewer.js?v=84';
 
 /* ==================== 聚合操作（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
 const STEP_LABELS = { detect: '目标检测', face: '人脸识别', pose: '姿势检测' };
-const FACE_STATUS = { matched: '已识别', unknown: '未识别', rejected: '质量不足', error: '识别失败', pending: '待比对' };
+/** 只画 head 框；筛选按「已贴姓名 / 未识别 / 已绑姿势」分档，与图片推理的类别胶囊同一套交互 */
+const FILTERS = [
+  { key: 'all', label: '全部 head' },
+  { key: 'named', label: '已贴姓名' },
+  { key: 'unknown', label: '未识别' },
+  { key: 'posed', label: '已绑姿势' },
+];
+const AGG_PANES = { images: 'aggregate-pane-images', result: 'aggregate-pane-result' };
+let ACTIVE_RECORD = null;
+let ACTIVE_FILTER = 'all';
 
-/** 读取聚合参数：人脸识别 / 姿势检测由勾选框决定是否参与 */
+/** 读取聚合参数：人脸识别 / 姿势检测由勾选框决定是否参与。
+ *
+ * 目标检测与绑定规则都不在这里配——后端固定（图片推理那套人头检测 + 链式贪心一一对应）。
+ */
 function readAggregateOptions() {
-  const weights = el('aggWeights').value || 'medium.pt';
-  const confidence = Number(el('aggConf').value || '0.38');
-  if (!Number.isFinite(confidence) || confidence < 0.01 || confidence > 0.99) throw new Error('置信度必须在 0.01 到 0.99 之间');
-  const imgsz = Number(el('aggImgsz').value || '640');
-  if (!Number.isInteger(imgsz) || imgsz < 320 || imgsz > 1920) throw new Error('尺寸 imgsz 必须是 320 到 1920 之间的整数');
   const threshold = Number(el('aggRecThreshold').value || '0.4');
   if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('识别阈值必须在 0 到 1 之间');
   const faceConfidence = Number(el('aggFaceConfidence').value || '0.5');
   if (!Number.isFinite(faceConfidence) || faceConfidence < 0.01 || faceConfidence > 0.99) throw new Error('人脸置信度必须在 0.01 到 0.99 之间');
   const poseConfidence = Number(el('aggPoseConfidence').value || '0.6');
   if (!Number.isFinite(poseConfidence) || poseConfidence < 0.01 || poseConfidence > 0.99) throw new Error('姿势置信度必须在 0.01 到 0.99 之间');
-  const bindIou = Number(el('aggBindIou').value || '0.3');
-  if (!Number.isFinite(bindIou) || bindIou < 0 || bindIou > 1) throw new Error('绑定 IoU 阈值必须在 0 到 1 之间');
   return {
-    weights, confidence, imgsz, classes: el('aggClasses').value.trim(),
     face: !!el('aggFaceRecognition').checked, pose: !!el('aggPose').checked,
     threshold, face_confidence: faceConfidence, pose_confidence: poseConfidence,
-    bind: el('aggBind').value || 'iou', bind_iou: bindIou,
   };
 }
+
+/* ==================== 子标签页（待推理图片 / 聚合结果，布局与图片推理一致）==================== */
+
+/** pane: 'images' | 'result' */
+function switchAggregatePane(pane) {
+  Object.entries(AGG_PANES).forEach(([key, id]) => el(id).classList.toggle('active', key === pane));
+  document.querySelectorAll('.subtab[data-agg]').forEach((tab) => {
+    tab.classList.toggle('active', tab.dataset.agg === pane);
+  });
+  el('aggRefresh').hidden = pane !== 'images';
+  if (pane !== 'images') hideHoverPreview();
+  window.scrollTo(0, 0);
+}
+
+document.querySelectorAll('.subtab[data-agg]').forEach((tab) => {
+  tab.addEventListener('click', () => switchAggregatePane(tab.dataset.agg || 'images'));
+});
 
 /** 三步各自的耗时与统计（未勾选的显示「未启用」，避免看起来像漏跑） */
 function stepLine(steps) {
   return Object.entries(STEP_LABELS).map(([key, label]) => {
     const step = (steps || {})[key];
     if (!step || !step.enabled) return `<span class="agg-step is-off">${esc(label)}：未启用</span>`;
-    const detail = key === 'detect' ? `${step.count} 个目标 · ${step.weight} · ${step.confidence}`
+    const detail = key === 'detect' ? `${step.count} 个人头`
       : key === 'face' ? `检出 ${step.face_count} 张 · 识别 ${step.matched} · 库内 ${step.library_count} 人 · 阈值 ${step.threshold}`
-      : `${step.count} 人 · 绑定 ${step.bound} · ${step.strategy} ≥ ${step.iou_threshold}`;
+        : `${step.count} 人 · 绑定 ${step.bound} · 未绑定 ${step.unbound}`;
     return `<span class="agg-step"><b>${esc(label)}</b>：${esc(detail)}｜${esc(step.elapsed_seconds)}s</span>`;
   }).join('');
 }
 
-function cell(value, fallback = '—') {
-  return value ? esc(value) : `<span class="agg-muted">${esc(fallback)}</span>`;
+/** head 框上的标签：姓名 + 相似度（未识别就写类别 + 置信度），再挂上姿势状态 */
+function headLabel(target) {
+  const states = [...new Set((target.poses || []).map((pose) => pose.behavior?.state).filter(Boolean))];
+  const poseNote = states.length ? ` · ${states.join('、')}` : '';
+  return target.name
+    ? `${target.name} ${target.similarity}${poseNote}`
+    : `${target.class_name} ${target.confidence}${poseNote}`;
 }
 
-/** 目标明细：识别到的姓名、对应人脸、绑定上的姿势 */
-function targetRow(target, index) {
-  const name = target.name
-    ? `<b class="agg-name">${esc(target.name)}</b> <small>${esc(target.similarity)}</small>`
-    : cell('');
-  const face = target.face_id ? `<small>#${esc(target.face_id)}</small>` : cell('');
-  const poses = (target.poses || []).map((pose) =>
-    `${esc(pose.behavior?.state || '无法判断')}<small>（IoU ${esc(pose.bind?.iou)} / ${esc(pose.bind?.strategy || '')}）</small>`).join('、');
-  return `<tr><td>${index + 1}</td><td>${esc(target.class_name)} <small>${esc(target.confidence)}</small></td>
-    <td>${name}</td><td>${face}</td><td>${poses || cell('')}</td>
-    <td><small>${esc((target.bbox || []).join(', '))}</small></td></tr>`;
+function visibleTargets() {
+  const targets = ACTIVE_RECORD?.targets || [];
+  if (ACTIVE_FILTER === 'named') return targets.filter((target) => target.name);
+  if (ACTIVE_FILTER === 'unknown') return targets.filter((target) => !target.name);
+  if (ACTIVE_FILTER === 'posed') return targets.filter((target) => (target.poses || []).length);
+  return targets;
 }
 
-function renderAggregateResult(r, filename) {
+/** 框用百分比定位（与 viewer.js 一致：viewer 尺寸 = 图片显示尺寸） */
+function pct(value, total) {
+  return `${(value / Math.max(1, total)) * 100}%`;
+}
+
+/** 只画 head 框，姓名与姿势状态都在框的标签上；明细表里同一行跟着显隐 */
+function paintHeads() {
+  const record = ACTIVE_RECORD;
   const box = el('aggResult');
-  const summary = r.summary || {};
+  if (!record) return;
+  const layer = box.querySelector('[data-role="boxes"]');
+  if (!layer) return;
+  layer.innerHTML = '';
+  const shown = visibleTargets();
+  shown.forEach((target) => {
+    const [x1, y1, x2, y2] = target.bbox;
+    const node = document.createElement('div');
+    node.className = 'bbox';
+    node.style.setProperty('--c', target.name ? '#137333' : '#1a73e8');
+    node.style.left = pct(x1, record.image_width);
+    node.style.top = pct(y1, record.image_height);
+    node.style.width = pct(x2 - x1, record.image_width);
+    node.style.height = pct(y2 - y1, record.image_height);
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = headLabel(target);
+    node.appendChild(tag);
+    layer.appendChild(node);
+  });
+  box.querySelectorAll('[data-role="headrow"]').forEach((row) => {
+    row.hidden = !shown.includes(record.targets[Number(row.dataset.i)]);
+  });
+  const counts = {
+    all: record.targets.length,
+    named: record.targets.filter((target) => target.name).length,
+    unknown: record.targets.filter((target) => !target.name).length,
+    posed: record.targets.filter((target) => (target.poses || []).length).length,
+  };
+  box.querySelectorAll('[data-role="aggfilter"] .chip').forEach((chip) => {
+    chip.textContent = `${chip.dataset.label} ${counts[chip.dataset.filter]}`;
+    chip.style.opacity = chip.dataset.filter === ACTIVE_FILTER ? '1' : '.5';
+  });
+  const countNode = box.querySelector('#aggResultCount');
+  if (countNode) {
+    countNode.textContent =
+      `图上 ${shown.length} 个 head 框 / 共检出 ${record.targets.length} 个｜已贴姓名 ${counts.named} 个` +
+      (record.summary ? `｜姿势绑定 ${record.summary.bound_poses}/${record.summary.poses}` : '');
+  }
+}
+
+function renderAggregateResult(record, filename) {
+  const box = el('aggResult');
+  ACTIVE_RECORD = record;
+  ACTIVE_FILTER = 'all';
+  const summary = record.summary || {};
   el('aggResultName').textContent = filename;
   el('aggStatus').textContent =
-    `目标 ${r.count} 个｜贴姓名 ${summary.named_targets ?? 0} 个｜` +
+    `人头 ${record.count} 个｜贴姓名 ${summary.named_targets ?? 0} 个｜` +
     `人脸 ${summary.faces ?? 0} 张（已识别 ${summary.matched_faces ?? 0}、未识别 ${summary.unknown_faces ?? 0}、质量不足 ${summary.rejected_faces ?? 0}）｜` +
-    `姿势 ${summary.poses ?? 0} 人（已绑定 ${summary.bound_poses ?? 0}）｜总耗时 ${r.elapsed_seconds}s`;
+    `姿势 ${summary.poses ?? 0} 人（已绑定 ${summary.bound_poses ?? 0}）｜总耗时 ${record.elapsed_seconds}s`;
 
   const notes = [];
-  if ((r.unbound_faces || []).length) notes.push(`没落到任何目标框的人脸：${r.unbound_faces.join('、')}`);
-  if ((r.unbound_poses || []).length) notes.push(`没绑上目标的姿势：第 ${r.unbound_poses.join('、')} 人`);
-  const rows = (r.targets || []).map(targetRow).join('');
+  if ((record.unbound_faces || []).length) notes.push(`没落到 head 框的人脸：${record.unbound_faces.join('、')}`);
+  if ((record.unbound_poses || []).length) notes.push(`没绑上 head 框的姿势：第 ${record.unbound_poses.join('、')} 人`);
+  const rows = (record.targets || []).map((target, index) => {
+    const [x1, y1, x2, y2] = target.bbox;
+    const poses = (target.poses || []).map((pose) =>
+      `${esc(pose.behavior?.state || '无法判断')} <small>IoU ${esc(pose.bind?.iou)}</small>`).join('、');
+    return `<tr data-role="headrow" data-i="${index}">` +
+      `<td>${esc(target.class_name)} <small>${esc(target.confidence)}</small></td>` +
+      `<td>${target.name ? `<b class="agg-name">${esc(target.name)}</b> <small>${esc(target.similarity)}</small>` : '<span class="agg-muted">—</span>'}</td>` +
+      `<td>${poses || '<span class="agg-muted">—</span>'}</td>` +
+      `<td>${esc(Math.round((x1 + x2) / 2))}, ${esc(Math.round((y1 + y2) / 2))}</td>` +
+      `<td>${esc(x1)}, ${esc(y1)}, ${esc(x2)}, ${esc(y2)}</td></tr>`;
+  }).join('');
+
   box.innerHTML =
-    `<div class="agg-steps">${stepLine(r.steps)}</div>` +
+    `<div class="agg-steps">${stepLine(record.steps)}</div>` +
     (notes.length ? `<p class="hint">${esc(notes.join('；'))}</p>` : '') +
-    `<figure class="agg-figure"><img src="${esc(r.result_url)}" alt="${esc(filename)} 聚合结果">` +
-    `<figcaption>${esc(r.result || '')}</figcaption></figure>` +
-    `<table class="agg-table"><thead><tr><th>#</th><th>目标</th><th>姓名</th><th>人脸</th><th>姿势（绑定）</th><th>坐标</th></tr></thead>` +
-    `<tbody>${rows || '<tr><td colspan="6">没有检出目标</td></tr>'}</tbody></table>` +
-    `<p class="hint">姓名归属：人脸中心落在哪个目标框内就归给谁（多个框都包含时取最小的）；都不包含时吸附到最近目标中心。` +
-    `姿势绑定规则：${esc(r.bind?.rule || '')}。人脸框颜色：绿=已识别、橙=未识别、灰=质量不足。</p>`;
+    `<div class="chips" data-role="aggfilter">` +
+    FILTERS.map((filter, index) => `<button class="chip" data-filter="${filter.key}" data-label="${esc(filter.label)}"` +
+      ` style="background:${classColor(index)}">${esc(filter.label)}</button>`).join('') +
+    `</div>` +
+    `<div class="viewer" data-role="viewer">` +
+    `<img class="base" data-role="baseimg" src="/images/${encodeURIComponent(filename)}" alt="聚合图">` +
+    `<div class="boxes" data-role="boxes"></div></div>` +
+    `<div class="viewer-foot"><span id="aggResultCount"></span>` +
+    (record.result_url ? `<a href="${esc(record.result_url)}" target="_blank">后端渲染图（对照）</a>` : '') +
+    `</div>` +
+    `<div class="det-table-wrap"><table><thead><tr><th>人头</th><th>姓名</th><th>姿势（绑定）</th>` +
+    `<th>中心 (cx, cy)</th><th>左上右下 (x1, y1, x2, y2)</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    `<p class="hint">目标检测：${esc(record.steps?.detect?.rule || '')}<br>` +
+    `姓名归属与姿势绑定：${esc(record.bind?.rule || '')}。结果只画 head 框，姓名与姿势状态都挂在这个框上；` +
+    `没绑上的人脸 / 姿势在清单里列出来，不会硬塞给某个人头。</p>`;
+
+  box.querySelectorAll('[data-role="aggfilter"] .chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      ACTIVE_FILTER = chip.dataset.filter;
+      paintHeads();
+    });
+  });
+  const base = box.querySelector('[data-role="baseimg"]');
+  if (base) base.addEventListener('load', paintHeads);
+  paintHeads();
 }
 
 async function aggregateImage(filename) {
   const box = el('aggResult');
+  ACTIVE_RECORD = null;
+  switchAggregatePane('result');
   el('aggResultName').textContent = filename;
   el('aggStatus').textContent = '';
   const t0 = Date.now();
@@ -93,9 +198,9 @@ async function aggregateImage(filename) {
     const paint = () => {
       const seconds = ((Date.now() - t0) / 1000).toFixed(1);
       box.innerHTML = `<div>聚合中… <b>${seconds}s</b></div>` +
-        `<div style="font-size:12px;color:#80868b;margin-top:6px">图片：${esc(filename)}｜目标检测 ${esc(payload.weights)}｜` +
+        `<div style="font-size:12px;color:#80868b;margin-top:6px">图片：${esc(filename)}｜` +
         `人脸识别 ${payload.face ? '开' : '关'}｜姿势检测 ${payload.pose ? '开' : '关'}<br>` +
-        `（第一次运行要加载模型，可能较慢；超过 600 秒自动报超时）</div>`;
+        `（目标检测固定用「图片推理 → 目标检测」；第一次运行要加载模型，超过 600 秒自动报超时）</div>`;
     };
     paint();
     ticker = setInterval(paint, 200);
@@ -119,14 +224,14 @@ async function loadAggregate() {
     const data = await api('/api/images');
     hideHoverPreview();
     if (!data.images.length) {
-      grid.innerHTML = '<div class="empty">暂无待推理图片，请先在「上传」页上传</div>';
+      grid.innerHTML = '<div class="empty">暂无图片，请先上传</div>';
       return;
     }
     grid.innerHTML = '';
     for (const image of data.images) {
       const figure = document.createElement('figure');
       figure.title = `点击聚合：${image.filename}`;
-      figure.innerHTML = `<img src="${esc(image.url)}" alt="" loading="lazy"><figcaption>${esc(image.filename)}</figcaption>`;
+      figure.innerHTML = `<img src="${esc(image.url)}" alt=""><figcaption>${esc(image.filename)}</figcaption>`;
       bindImageHover(figure, () => ({ src: image.url, name: image.filename }));
       figure.addEventListener('click', () => { hideHoverPreview(); aggregateImage(image.filename); });
       grid.appendChild(figure);
@@ -137,5 +242,7 @@ async function loadAggregate() {
 }
 
 el('aggRefresh').addEventListener('click', loadAggregate);
+el('aggFaceRecognition').addEventListener('change', () => { el('aggRecThreshold').disabled = !el('aggFaceRecognition').checked; });
+el('aggPose').addEventListener('change', () => { el('aggPoseConfidence').disabled = !el('aggPose').checked; });
 
-export { loadAggregate, aggregateImage, renderAggregateResult };
+export { loadAggregate, aggregateImage, renderAggregateResult, switchAggregatePane };

@@ -249,20 +249,15 @@
 .head-cut-previews img { display: block; width: 88px; height: 54px; object-fit: contain; background: #f7f9fc; border-radius: 5px; }
 .head-cut-pagination { margin-top: 0; }
 
-/* ==================== 聚合操作（目标检测 + 人脸识别 + 姿势检测绑定）==================== */
+/* ==================== 聚合操作（目标检测 + 人脸识别 + 姿势检测绑定）====================
+ * 结果只画 head 框：框用 .bbox（同图片推理），姓名与姿势状态挂在框的 .tag 上；
+ * 明细表复用 .det-table-wrap。这里只加三步状态与姓名着色。 */
 
 .agg-steps { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .agg-step { padding: 3px 8px; border-radius: 12px; background: #e8f0fe; color: #1a4b8f; font-size: 11px; }
 .agg-step.is-off { background: #f1f3f4; color: #80868b; }
-.agg-figure { margin: 8px 0; }
-.agg-figure img { display: block; max-width: 100%; border-radius: 6px; background: #f7f9fc; }
-.agg-figure figcaption { margin-top: 4px; font-size: 11px; color: #80868b; }
-.agg-table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 12px; }
-.agg-table th, .agg-table td { padding: 4px 6px; border-bottom: 1px solid #eceff1; text-align: left; vertical-align: top; }
-.agg-table th { background: #f7f9fc; color: #52647b; font-weight: 600; white-space: nowrap; }
-.agg-table td small { color: #80868b; }
-.agg-table .agg-name { color: #137333; }
-.agg-table .agg-muted { color: #bdc1c6; }
+.agg-name { color: #137333; }
+.agg-muted { color: #bdc1c6; }
 @media (max-width: 850px) {
   .head-cut-layout { grid-template-columns: 1fr; }
   #cutImageGrid { max-height: 280px; }

@@ -35,6 +35,9 @@ const tabs = ['detect', 'headcut', 'video', 'train', 'dataset', 'aggregate'].map
 const subtabs = ['images', 'result', 'history'].map((name) => {
   const tab = new Element(); tab.dataset.sub = name; return tab;
 });
+const aggregateSubtabs = ['images', 'result'].map((name) => {
+  const tab = new Element(); tab.dataset.agg = name; return tab;
+});
 const calls = [];
 const responses = {
   '/api/yolo/status': { message: 'ready', available: true, weights: ['test.pt'], default_weights: 'test.pt' },
@@ -43,12 +46,16 @@ const responses = {
   '/api/head-cuts': { runs: [] },
 };
 const context = vm.createContext({
-  console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, URLSearchParams,
+  console, setTimeout, clearTimeout, AbortController, URLSearchParams,
+  // setInterval 只记录不真的跑：进度刷新用它，真的跑起来进程会一直挂着不退出
+  setInterval: () => 1, clearInterval: () => {},
   window: { addEventListener() {}, scrollTo() {} },
   document: {
     getElementById: (id) => nodes.get(id) || null,
     createElement: () => new Element(), addEventListener() {},
-    querySelectorAll: (selector) => selector === '.tab' ? tabs : selector === '.subtab' ? subtabs : [],
+    querySelectorAll: (selector) => selector === '.tab' ? tabs
+      : selector === '#tab-detect .subtab' ? subtabs
+      : selector === '.subtab[data-agg]' ? aggregateSubtabs : [],
     body: new Element(),
   },
   fetch: async (url, options = {}) => {
@@ -82,6 +89,8 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(calls.includes('/api/videos'));
   for (const tab of tabs) { await tab.events.click(); await flush(); }
   for (const tab of subtabs) { await tab.events.click(); await flush(); }
+  assert.equal(aggregateSubtabs.length, 2);
+  for (const tab of aggregateSubtabs) { await tab.events.click(); await flush(); }
   assert(calls.includes('/api/datasets'));
   assert(calls.includes('/api/inferences'));
   assert(calls.includes('/api/head-cuts'));
@@ -374,15 +383,16 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
       source: '课堂A.png', result: '课堂A_agg.png', result_url: '/api/aggregate/results/%E8%AF%BE%E5%A0%82A_agg.png',
       count: 1, elapsed_seconds: 4.2,
       steps: {
-        detect: { enabled: true, weight: 'medium.pt', confidence: 0.38, count: 1, elapsed_seconds: 1.1 },
+        detect: { enabled: true, mode: 'head_fusion', count: 1, rule: 'medium.pt 0.45 为基准 + best_stg2.safetensors 0.25 补齐', elapsed_seconds: 1.1 },
         face: { enabled: true, face_count: 1, matched: 1, threshold: 0.4, library_count: 155, elapsed_seconds: 1.6 },
-        pose: { enabled: true, count: 1, bound: 1, strategy: 'iou', iou_threshold: 0.3, elapsed_seconds: 1.5 },
+        pose: { enabled: true, count: 1, bound: 1, unbound: 0, min_iou: 0, elapsed_seconds: 1.5 },
       },
-      bind: { strategy: 'iou', rule: '姿势框与目标框的 IoU 最大，且 ≥ 绑定 IoU', face_tolerance: 0.5 },
+      bind: { rule: '链式贪心 + 一一对应：只保留 IoU > 0 的配对', face_rule: '链式贪心 + 一一对应', min_iou: 0 },
+      image_width: 200, image_height: 400,
       summary: { targets: 1, named_targets: 1, faces: 1, matched_faces: 1, unknown_faces: 0, rejected_faces: 0, poses: 1, bound_poses: 1 },
       unbound_faces: [], unbound_poses: [],
-      targets: [{ class_name: 'person', confidence: 0.91, bbox: [10, 10, 90, 200], name: '张三', entry_id: '0001', similarity: 0.62,
-        face_id: 'F01', poses: [{ behavior: { state: '低头' }, bind: { iou: 0.72, strategy: 'iou' } }] }],
+      targets: [{ class_name: 'head', confidence: 0.91, bbox: [10, 10, 90, 200], name: '张三', entry_id: '0001', similarity: 0.62,
+        face_id: 'F01', poses: [{ behavior: { state: '低头' }, bind: { iou: 0.12, distance: 3.5 } }] }],
     };
   };
   assert.equal(calls.includes(aggregateUrl), false);
@@ -394,27 +404,38 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
   assert.deepEqual(aggregatePayload, {
-    weights: 'test.pt', confidence: 0.38, imgsz: 640, classes: '', face: true, pose: true,
-    threshold: 0.4, face_confidence: 0.5, pose_confidence: 0.6, bind: 'iou', bind_iou: 0.3,
+    face: true, pose: true, threshold: 0.4, face_confidence: 0.5, pose_confidence: 0.6,
   });
   assert(nodes.get('aggStatus').textContent.includes('贴姓名 1 个'));
   const aggBox = nodes.get('aggResult');
-  assert(aggBox.innerHTML.includes('/api/aggregate/results/'), '结果图应指向聚合结果接口');
+  assert(aggBox.innerHTML.includes('data-role="viewer"') && aggBox.innerHTML.includes('class="boxes"'), '结果要和图片推理一样叠框渲染');
+  assert(aggBox.innerHTML.includes('data-role="aggfilter"'), '要有与图片推理同款的胶囊筛选');
   assert(aggBox.innerHTML.includes('张三') && aggBox.innerHTML.includes('agg-name'), '姓名和相似度要写进明细表');
   assert(aggBox.innerHTML.includes('低头'), '绑定上的姿势要写进明细表');
-  assert(aggBox.innerHTML.includes('agg-step') && aggBox.innerHTML.includes('目标检测'), '三步耗时统计要显示出来');
+  assert(aggBox.innerHTML.includes('medium.pt 0.45 为基准'), '结果里要说明目标检测用的哪套规则');
+  assert(aggBox.innerHTML.includes('/api/aggregate/results/'), '后端渲染图仍要附对照链接');
+  // 只画 head 框，且框上挂着姓名 + 姿势标签（DOM 桩不解析 HTML，直接查叠框层）
+  const headLayer = aggBox.querySelector('[data-role="boxes"]');
+  assert.equal(headLayer.children.length, 1);
+  assert.equal(headLayer.children[0].style.left, '5%');
+  assert.equal(headLayer.children[0].style.top, '2.5%');
+  assert.equal(headLayer.children[0].style.width, '40%');
+  assert.equal(headLayer.children[0].children[0].textContent, '张三 0.62 · 低头');
+  assert.equal(aggBox.querySelector('#aggResultCount').textContent.includes('图上 1 个 head 框'), true);
   // 勾掉两步后只跑目标检测，参数随勾选变化
   nodes.get('aggFaceRecognition').checked = false;
   nodes.get('aggPose').checked = false;
-  nodes.get('aggBind').value = 'contain';
   nodes.get('aggRecThreshold').value = '0.35';
   nodes.get('aggPoseConfidence').value = '';
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
   assert.equal(aggregatePayload.face, false);
   assert.equal(aggregatePayload.pose, false);
-  assert.equal(aggregatePayload.bind, 'contain');
   assert.equal(aggregatePayload.threshold, 0.35);
+  assert.equal(aggregatePayload.pose_confidence, 0.6, '清空输入框要回落到默认置信度');
+  // 点图后要自动切到「聚合结果」子页，并把状态切回图片页的刷新按钮藏起来
+  assert.equal(aggregateSubtabs[0].dataset.agg, 'images');
+  assert.equal(nodes.get('aggRefresh').hidden, true);
   nodes.get('aggRecThreshold').value = '2';
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
