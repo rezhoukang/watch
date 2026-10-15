@@ -1,4 +1,4 @@
-import { el } from './core.js?v=77';
+import { el } from './core.js?v=80';
 
 /* ==================== 缩略图悬浮大图预览 ==================== */
 
@@ -21,12 +21,13 @@ function placeHoverPreview(ev) {
   box.style.top = `${Math.round(y)}px`;
 }
 
-function showHoverPreview(src, name, ev) {
+function showHoverPreview(src, name, ev, enlarge = false) {
   const box = el('hoverPreview');
   const img = box.querySelector('img');
   hoverEv = ev;
   if (img.getAttribute('src') !== src) img.src = src;
   el('hoverPreviewCap').textContent = name || '';
+  box.classList.toggle('is-enlarged', enlarge);
   box.style.display = 'block';
   placeHoverPreview(ev);
 }
@@ -40,7 +41,7 @@ function hideHoverPreview() {
 function bindImageHover(target, getPreview) {
   target.addEventListener('mouseenter', (ev) => {
     const preview = getPreview();
-    if (preview?.src) showHoverPreview(preview.src, preview.name, ev);
+    if (preview?.src) showHoverPreview(preview.src, preview.name, ev, preview.enlarge);
   });
   target.addEventListener('mousemove', (ev) => {
     if (hoverEv) { hoverEv = ev; placeHoverPreview(ev); }

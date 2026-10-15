@@ -1,4 +1,4 @@
-import { el, esc } from './core.js?v=77';
+import { el, esc } from './core.js?v=80';
 
 /* ==================== 推理结果查看器（框由前端渲染）==================== */
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=48">
+<link rel="stylesheet" href="/style.css?v=52">
 </head>
 <body>
 <div class="app">
@@ -55,47 +55,61 @@
       <label>自定义 IoU 生效置信度 &gt; <input id="cutMergeConfidence" type="number" min="0" max="1" step="0.01" value="0.55"></label>
     </div>
     <div class="head-cut-layout">
-      <div>
+      <div class="head-cut-panel">
         <h2>待切割图片</h2>
+        <div class="head-cut-image-actions">
+          <button id="cutUpload" class="btn small">上传图片</button>
+          <input id="cutUploadInput" type="file" accept=".jpg,.jpeg,.png,.bmp,.webp" multiple hidden>
+          <button id="cutDeleteSelected" class="btn small danger" disabled>删除选中</button>
+        </div>
         <div class="gallery-bar">
           <label><input id="cutSelectAll" type="checkbox">全选</label>
           <button class="btn small ghost" id="cutClearSelection">取消选择</button>
           <button class="btn small ghost" id="cutRefresh">刷新</button>
           <span id="cutSelectionCount">已选 0 张</span>
         </div>
-        <button class="btn" id="cutInfer" disabled>批量推理并切割</button>
-        <button class="btn small ghost" id="cutCancel" hidden>取消任务</button>
+        <div class="head-cut-actions">
+          <button class="btn" id="cutInfer" disabled>批量推理并切割</button>
+          <button class="btn small ghost" id="cutCancel" hidden>取消任务</button>
+        </div>
+        <p id="cutImageStatus" class="status" role="status" aria-live="polite"></p>
         <p id="cutProgress" class="status" role="status"></p>
         <div class="grid" id="cutImageGrid"></div>
       </div>
-      <div>
+      <div class="head-cut-panel">
         <h2>头管理</h2>
         <div class="head-cut-controls">
-          <label>批次 <select id="cutBatchSelect" aria-label="头切割批次"><option value="">暂无批次</option></select></label>
-          <label>来源 <select id="cutSourceFilter" aria-label="裁剪来源"><option value="">全部图片</option></select></label>
-          <input id="cutSearch" placeholder="搜索编号或类别" aria-label="搜索裁剪图">
-          <label>人脸置信度 ≥ <input id="cutFaceConfidence" type="number" min="0.01" max="0.99" step="0.05" value="0.5"></label>
-          <button id="cutDetectFaces" class="btn small" disabled title="检测当前批次 crops/ 中的全部原始裁剪图">批量检测人脸</button>
-          <button id="cutFaceCancel" class="btn small ghost" hidden>取消人脸检测</button>
-          <select id="cutFaceFilter" aria-label="人脸检测状态">
-            <option value="">全部人脸状态</option><option value="detected">检出人脸</option>
-            <option value="no_face">未检出人脸</option><option value="error">检测失败</option><option value="pending">未检测</option>
-          </select>
-          <label>识别阈值 ≥ <input id="cutRecThreshold" type="number" min="0" max="1" step="0.01" value="0.4"></label>
-          <label title="人脸检测置信度门槛：默认与 SCRFD 检出阈值一致(0.5)，避免重复设卡；调高更保守">质量置信度 ≥ <input id="cutRecConfidence" type="number" min="0" max="1" step="0.05" value="0.5"></label>
-          <label title="人脸在原始像素下的短边下限：低于此值不参与比对（远景小脸会在此被拦）">最小人脸 ≥ <input id="cutRecSize" type="number" min="1" max="1000" step="1" value="24">px</label>
-          <button id="cutRecognizeFaces" class="btn small" disabled title="对当前批次已检出的人脸做 1:N 识别（需先导入人脸库）">1:N 识别</button>
-          <button id="cutRecCancel" class="btn small ghost" hidden>取消识别</button>
-          <select id="cutRecFilter" aria-label="识别结果筛选">
-            <option value="">全部识别结果</option><option value="matched">已识别</option>
-            <option value="unknown">未识别</option><option value="pending">未识别任务</option>
-          </select>
+          <div class="head-cut-filters">
+            <label>批次 <select id="cutBatchSelect" aria-label="头切割批次"><option value="">暂无批次</option></select></label>
+            <label>来源 <select id="cutSourceFilter" aria-label="裁剪来源"><option value="">全部图片</option></select></label>
+            <input id="cutSearch" placeholder="搜索编号或类别" aria-label="搜索裁剪图">
+          </div>
+          <div class="head-cut-control-row">
+            <label>人脸置信度 ≥ <input id="cutFaceConfidence" type="number" min="0.01" max="0.99" step="0.05" value="0.5"></label>
+            <button id="cutDetectFaces" class="btn small" disabled title="检测当前批次 crops/ 中的全部原始裁剪图">批量检测人脸</button>
+            <button id="cutFaceCancel" class="btn small ghost" hidden>取消人脸检测</button>
+            <select id="cutFaceFilter" aria-label="人脸检测状态">
+              <option value="">全部人脸状态</option><option value="detected">检出人脸</option>
+              <option value="no_face">未检出人脸</option><option value="error">检测失败</option><option value="pending">未检测</option>
+            </select>
+          </div>
+          <div class="head-cut-control-row">
+            <label>识别阈值 ≥ <input id="cutRecThreshold" type="number" min="0" max="1" step="0.01" value="0.4"></label>
+            <label title="人脸检测置信度门槛：默认与 SCRFD 检出阈值一致(0.5)，避免重复设卡；调高更保守">质量置信度 ≥ <input id="cutRecConfidence" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+            <label title="人脸在原始像素下的短边下限：低于此值不参与比对（远景小脸会在此被拦）">最小人脸 ≥ <input id="cutRecSize" type="number" min="1" max="1000" step="1" value="24">px</label>
+            <button id="cutRecognizeFaces" class="btn small" disabled title="对当前批次已检出的人脸做 1:N 识别（需先导入人脸库）">1:N 识别</button>
+            <button id="cutRecCancel" class="btn small ghost" hidden>取消识别</button>
+            <select id="cutRecFilter" aria-label="识别结果筛选">
+              <option value="">全部识别结果</option><option value="matched">已识别</option>
+              <option value="unknown">未识别</option><option value="pending">未识别任务</option>
+            </select>
+          </div>
         </div>
         <p id="cutHeadCount" class="hint" role="status">选择左侧图片，点击推理后查看裁剪图。</p>
         <p id="cutFaceProgress" class="status" role="status"></p>
         <div id="cutSourcePreviews" class="head-cut-previews"></div>
         <div class="head-cut-grid" id="cutHeadGrid"></div>
-        <div class="gallery-bar">
+        <div class="gallery-bar head-cut-pagination">
           <button id="cutPreviousPage" class="btn small ghost" disabled>上一页</button>
           <span id="cutPageInfo"></span>
           <button id="cutNextPage" class="btn small ghost" disabled>下一页</button>
@@ -368,6 +382,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=77"></script>
+<script type="module" src="/app.js?v=80"></script>
 </body>
 </html>

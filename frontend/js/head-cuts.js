@@ -1,7 +1,9 @@
-import { el, esc, api, showError } from './core.js?v=77';
+import { el, esc, api, showError } from './core.js?v=80';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=80';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;
+let imageBusy = false, imageLoadVersion = 0;
 const PAGE_SIZE = 60;
 const fileUrl = (run, file) => `/api/head-cuts/${run}/files/${file.split('/').map(encodeURIComponent).join('/')}`;
 const running = status => status === 'running' || status === 'queued';
@@ -11,31 +13,92 @@ function syncSelection() {
   const all = el('cutSelectAll');
   all.checked = filenames.length > 0 && selected.size === filenames.length;
   all.indeterminate = selected.size > 0 && selected.size < filenames.length;
+  all.disabled = imageBusy || !filenames.length;
   el('cutSelectionCount').textContent = `已选 ${selected.size} 张`;
-  el('cutInfer').disabled = !!activeJob || !selected.size;
+  el('cutInfer').disabled = imageBusy || !!activeJob || !selected.size;
+  el('cutUpload').disabled = imageBusy;
+  el('cutUploadInput').disabled = imageBusy;
+  el('cutDeleteSelected').disabled = imageBusy || !selected.size;
+  el('cutClearSelection').disabled = imageBusy || !selected.size;
+  el('cutRefresh').disabled = imageBusy;
   el('cutCancel').hidden = !activeJob;
   for (const id of ['cutRtdetrBase', 'cutMergeIou', 'cutMergeConfidence']) el(id).disabled = !!activeJob;
-  el('cutImageGrid').querySelectorAll('[data-file]').forEach(input => { input.checked = selected.has(input.dataset.file); });
+  el('cutImageGrid').querySelectorAll('[data-file]').forEach(input => { input.checked = selected.has(input.dataset.file); input.disabled = imageBusy; });
+  el('cutImageGrid').querySelectorAll('.del-btn').forEach(button => { button.disabled = imageBusy; });
 }
 
 function renderImages(images) {
+  hideHoverPreview();
   filenames = images.map(i => i.filename);
   for (const name of selected) if (!filenames.includes(name)) selected.delete(name);
   const grid = el('cutImageGrid');
   grid.innerHTML = '';
+  if (!images.length) grid.innerHTML = '<div class="empty">暂无图片，点击「上传图片」添加。</div>';
   for (const image of images) {
     const card = document.createElement('figure');
     card.innerHTML = `<img src="${esc(image.url)}" alt="${esc(image.filename)}" loading="lazy"><figcaption>${esc(image.filename)}</figcaption>`;
+    bindImageHover(card.querySelector('img'), () => ({ src: image.url, name: image.filename }));
     const label = document.createElement('label'); label.className = 'head-cut-select';
     label.addEventListener('click', event => event.stopPropagation());
     const check = document.createElement('input'); check.type = 'checkbox'; check.dataset.file = image.filename;
     check.setAttribute('aria-label', `选择 ${image.filename}`);
     check.addEventListener('change', () => { if (check.checked) selected.add(image.filename); else selected.delete(image.filename); syncSelection(); });
     label.appendChild(check); card.appendChild(label);
-    card.addEventListener('click', event => { if (event.target === check) return; check.checked = !selected.has(image.filename); if (check.checked) selected.add(image.filename); else selected.delete(image.filename); syncSelection(); });
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'del-btn'; del.textContent = '×'; del.title = `删除 ${image.filename}`;
+    del.setAttribute('aria-label', del.title);
+    del.addEventListener('click', event => { event.stopPropagation(); return deleteImages([image.filename]); });
+    card.appendChild(del);
+    card.addEventListener('click', event => { if (imageBusy || event.target === check) return; check.checked = !selected.has(image.filename); if (check.checked) selected.add(image.filename); else selected.delete(image.filename); syncSelection(); });
     grid.appendChild(card);
   }
   syncSelection();
+}
+
+async function loadCutImages() {
+  const version = ++imageLoadVersion;
+  const data = await api('/api/images');
+  if (version === imageLoadVersion) renderImages(data.images);
+}
+
+async function uploadImages(files) {
+  if (imageBusy || !files.length) return;
+  imageBusy = true; syncSelection();
+  const status = el('cutImageStatus');
+  status.className = 'status';
+  let uploaded = 0, overwritten = 0;
+  const failures = [];
+  try {
+    for (const [index, file] of files.entries()) {
+      status.textContent = `正在上传 ${index+1}/${files.length}：${file.name}`;
+      const body = new FormData(); body.append('file', file);
+      try {
+        const result = await api('/api/upload', { method: 'POST', body }, 120000);
+        uploaded++; if (result.overwritten) overwritten++;
+      } catch (error) { failures.push(`${file.name}：${error instanceof Error ? error.message : String(error)}`); }
+    }
+    await loadCutImages();
+    status.className = 'status' + (failures.length ? ' error' : '');
+    status.textContent = `已上传 ${uploaded} 张${overwritten ? `（覆盖同名 ${overwritten} 张）` : ''}${failures.length ? `，失败 ${failures.length} 张：${failures.join('；')}` : ''}`;
+  } catch (error) { showError(status, error, '刷新图片列表失败'); }
+  finally { el('cutUploadInput').value = ''; imageBusy = false; syncSelection(); }
+}
+
+async function deleteImages(items) {
+  if (imageBusy || !items.length) return;
+  if (!confirm(`删除这 ${items.length} 张图片？图片推理中的同一图片也会移除，已保存的批次裁剪仍保留。`)) return;
+  imageBusy = true; hideHoverPreview(); syncSelection();
+  const status = el('cutImageStatus'); status.className = 'status'; status.textContent = '正在删除…';
+  try {
+    const result = await api('/api/images/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filenames: items }),
+    });
+    for (const filename of [...result.deleted, ...result.missing]) selected.delete(filename);
+    await loadCutImages();
+    status.className = 'status' + (result.failed.length ? ' error' : '');
+    status.textContent = `已删除 ${result.deleted.length} 张${result.missing.length ? `，${result.missing.length} 张已不存在` : ''}${result.failed.length ? `，失败 ${result.failed.length} 张：${result.failed.map(item => `${item.item}：${item.detail}`).join('；')}` : ''}`;
+  } catch (error) { showError(status, error, '删除图片失败'); }
+  finally { imageBusy = false; syncSelection(); }
 }
 
 async function loadBatches(preferred = current?.run_id) {
@@ -96,6 +159,7 @@ async function pollBatch(runId, version) {
 
 function renderHeads() {
   if (!current) return;
+  hideHoverPreview();
   const record = current;
   el('cutProgress').textContent = `${record.progress}/${record.total} · ${record.message}`;
   const faceJob = record.face_detection;
@@ -131,13 +195,15 @@ function renderHeads() {
   for (const image of record.images.filter(i => !source || i.source === source)) {
     const link = document.createElement('a'); link.href = fileUrl(record.run_id, image.annotated_file); link.target = '_blank';
     link.innerHTML = `<img src="${esc(link.href)}" alt="${esc(image.source)}编号总览" loading="lazy"><span>${esc(image.source)} · ${image.crop_count} 个</span>`;
+    bindImageHover(link.querySelector('img'), () => ({ src: link.href, name: `${image.source} · 编号总览` }));
     previews.appendChild(link);
   }
   const grid = el('cutHeadGrid');
   grid.innerHTML = '';
   for (const crop of filtered.slice(page*PAGE_SIZE, (page+1)*PAGE_SIZE)) {
     const figure = document.createElement('figure');
-    figure.innerHTML = `<a href="${esc(fileUrl(record.run_id, crop.raw_file))}" target="_blank"><img src="${esc(fileUrl(record.run_id, crop.marked_file))}" alt="${esc(crop.crop_id)}" loading="lazy"></a><figcaption><strong>${esc(crop.crop_id)}</strong><br>${esc(crop.source)}<br>${esc(crop.class_name)} · ${Number(crop.confidence).toFixed(2)}<br><small>(${crop.crop_bbox.join(', ')})</small></figcaption>`;
+    figure.innerHTML = `<a class="head-cut-photo" href="${esc(fileUrl(record.run_id, crop.raw_file))}" target="_blank"><img src="${esc(fileUrl(record.run_id, crop.marked_file))}" alt="${esc(crop.crop_id)}" loading="lazy"></a><figcaption><strong>${esc(crop.crop_id)}</strong><br>${esc(crop.source)}<br>${esc(crop.class_name)} · ${Number(crop.confidence).toFixed(2)}<br><small>(${crop.crop_bbox.join(', ')})</small></figcaption>`;
+    bindImageHover(figure.querySelector('img'), () => ({ src: fileUrl(record.run_id, crop.raw_file), name: crop.crop_id, enlarge: true }));
     const detection = crop.face_detection;
     const faceInfo = document.createElement('div'); faceInfo.className = 'head-face-info';
     const labels = { detected: '检出人脸', no_face: '未检出人脸', error: '检测失败', pending: '未检测' };
@@ -176,10 +242,13 @@ function renderHeads() {
         const query = `<a class="rec-query" href="${esc(fileUrl(record.run_id, face.file))}" target="_blank"><small title="${esc(face.face_id)}">人脸 ${index+1} · ${Number(face.confidence).toFixed(2)}</small>${badge}</a>`;
         // 命中时把人像库里的对应登记照放在右侧，便于人工核对是否同一个人
         const lib = (rec?.status === 'matched' && rec.match?.photo_url)
-          ? `<span class="rec-pair-arrow" aria-hidden="true">→</span><a class="rec-lib" href="${esc(rec.match.photo_url)}" target="_blank" title="人像库登记照：${esc(rec.match.name || '')}（编号 ${esc(rec.match.entry_id || '')}）"><img src="${esc(rec.match.photo_url)}" alt="${esc(rec.match.name || '')} 登记照" loading="lazy"><em>库内登记照</em></a>`
+          ? `<a class="rec-lib" href="${esc(rec.match.photo_url)}" target="_blank" title="人像库登记照：${esc(rec.match.name || '')}（编号 ${esc(rec.match.entry_id || '')}）"><img src="${esc(rec.match.photo_url)}" alt="${esc(rec.match.name || '')} 登记照" loading="lazy"><em>登记照</em></a>`
           : '';
         return `<div class="rec-item">${query}${lib}</div>`;
       }).join('');
+      for (const link of faces.querySelectorAll('a')) {
+        bindImageHover(link, () => ({ src: link.href, name: link.className === 'rec-lib' ? '库内登记照' : '人脸裁剪', enlarge: true }));
+      }
       figure.appendChild(faces);
       if (detection.annotated_file) {
         const link = document.createElement('a'); link.className = 'head-face-link'; link.textContent = '查看人脸框';
@@ -199,12 +268,16 @@ function renderHeads() {
 
 async function loadHeadCuts() {
   try {
-    const images = await api('/api/images'); renderImages(images.images);
+    await loadCutImages();
     await loadBatches();
   } catch (error) { showError(el('cutProgress'), error, '加载头切割失败'); }
 }
 
 el('cutRefresh').addEventListener('click', loadHeadCuts);
+el('cutUpload').addEventListener('click', () => el('cutUploadInput').click());
+el('cutUploadInput').addEventListener('change', event => uploadImages(Array.from(event.target.files || [])));
+el('cutDeleteSelected').addEventListener('click', () => deleteImages([...selected]));
+for (const id of ['cutImageGrid', 'cutHeadGrid', 'cutSourcePreviews']) el(id).addEventListener('scroll', hideHoverPreview);
 el('cutSelectAll').addEventListener('change', event => { selected.clear(); if (event.target.checked) filenames.forEach(n => selected.add(n)); syncSelection(); });
 el('cutClearSelection').addEventListener('click', () => { selected.clear(); syncSelection(); });
 el('cutBatchSelect').addEventListener('change', () => { if (el('cutBatchSelect').value) openBatch(el('cutBatchSelect').value); });
@@ -254,7 +327,7 @@ el('cutCancel').addEventListener('click', async () => {
   catch (error) { showError(el('cutProgress'), error, '取消任务失败'); }
 });
 el('cutInfer').addEventListener('click', async () => {
-  if (activeJob || !selected.size) return;
+  if (imageBusy || activeJob || !selected.size) return;
   el('cutInfer').disabled = true;
   try {
     const mergeIou = Number(el('cutMergeIou').value || '.1');

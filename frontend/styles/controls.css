@@ -73,6 +73,12 @@
   max-height: 62vh;
   border-radius: 6px;
 }
+.hover-preview.is-enlarged img {
+  width: min(40vw, 280px);
+  height: min(50vh, 320px);
+  object-fit: contain;
+  background: #f7f9fc;
+}
 .hover-preview .cap {
   font-size: 11px;
   color: #80868b;

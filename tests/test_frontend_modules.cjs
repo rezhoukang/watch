@@ -25,6 +25,7 @@ class Element {
   scrollIntoView() {}
   getBoundingClientRect() { return { left: 0 }; }
   setAttribute() {}
+  click() { this.clicked = true; }
 }
 const root = path.resolve(__dirname, '../frontend');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -36,6 +37,7 @@ const subtabs = ['images', 'result', 'history'].map((name) => {
   const tab = new Element(); tab.dataset.sub = name; return tab;
 });
 const calls = [];
+let allowImageDelete = true;
 const responses = {
   '/api/yolo/status': { message: 'ready', available: true, weights: ['test.pt'], default_weights: 'test.pt' },
   '/api/images': { images: [] }, '/api/videos': { videos: [], outputs: [] },
@@ -44,6 +46,11 @@ const responses = {
 };
 const context = vm.createContext({
   console, setTimeout, clearTimeout, AbortController, URLSearchParams,
+  confirm: () => allowImageDelete,
+  FormData: class {
+    constructor() { this.fields = new Map(); }
+    append(key, value) { this.fields.set(key, value); }
+  },
   window: { addEventListener() {}, scrollTo() {} },
   document: {
     getElementById: (id) => nodes.get(id) || null,
@@ -302,6 +309,65 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(viewer.querySelector('[data-role="tablebody"]').children.some(row => row.innerHTML.includes('疑似阅读')));
   viewer.querySelector('[data-role="skeleton"]').events.change({ target: { checked: false } });
   assert(!viewer.querySelector('[data-role="boxes"]').children.some((node) => node.className === 'pose-layer'));
+  // Head-cut source management: multi-upload, cancellation and partial deletion failures.
+  nodes.get('cutUpload').events.click();
+  assert.equal(nodes.get('cutUploadInput').clicked, true);
+  const uploadNames = [];
+  responses['/api/upload'] = options => {
+    assert.equal(options.method, 'POST');
+    const file = options.body.fields.get('file'); uploadNames.push(file.name);
+    if (file.name === 'invalid.png') throw new Error('Upload failed');
+    const images = responses['/api/images'].images;
+    const overwritten = images.some(image => image.filename === file.name);
+    if (!overwritten) images.push({ filename: file.name, url: `/images/${file.name}` });
+    return { filename: file.name, overwritten };
+  };
+  const upload = nodes.get('cutUploadInput').events.change({ target: { files: [
+    { name: 'uploaded-a.png' }, { name: 'invalid.png' }, { name: 'uploaded-b.png' }, { name: '课堂A.png' },
+  ] } });
+  assert.equal(nodes.get('cutUpload').disabled, true);
+  assert.equal(nodes.get('cutInfer').disabled, true);
+  assert.equal(nodes.get('cutDeleteSelected').disabled, true);
+  await upload;
+  assert.deepEqual(uploadNames, ['uploaded-a.png', 'invalid.png', 'uploaded-b.png', '课堂A.png']);
+  assert.equal(nodes.get('cutUploadInput').value, '');
+  assert.equal(nodes.get('cutImageGrid').children.length, 3);
+  assert(nodes.get('cutImageStatus').textContent.includes('已上传 3 张'));
+  assert(nodes.get('cutImageStatus').textContent.includes('覆盖同名 1 张'));
+  assert(nodes.get('cutImageStatus').textContent.includes('失败 1 张'));
+  let deletePayload, failedDeleteName = null;
+  responses['/api/images/delete'] = options => {
+    deletePayload = JSON.parse(options.body);
+    const deleted = deletePayload.filenames.filter(name => name !== failedDeleteName);
+    responses['/api/images'].images = responses['/api/images'].images.filter(image => !deleted.includes(image.filename));
+    return { deleted, missing: [], failed: failedDeleteName ? [{ item: failedDeleteName, detail: 'File busy' }] : [] };
+  };
+  const uploadedCard = nodes.get('cutImageGrid').children.find(card => card.innerHTML.includes('uploaded-a.png'));
+  const deleteButton = uploadedCard.children.find(child => child.className === 'del-btn');
+  const beforeCancel = calls.length;
+  allowImageDelete = false;
+  await deleteButton.events.click({ stopPropagation() {} });
+  assert.equal(calls.length, beforeCancel, '取消删除不得发送请求');
+  allowImageDelete = true;
+  await deleteButton.events.click({ stopPropagation() {} });
+  assert.deepEqual(deletePayload, { filenames: ['uploaded-a.png'] });
+  assert.equal(nodes.get('cutImageGrid').children.length, 2);
+  nodes.get('cutSelectAll').checked = true;
+  nodes.get('cutSelectAll').events.change({ target: nodes.get('cutSelectAll') });
+  failedDeleteName = '课堂A.png';
+  await nodes.get('cutDeleteSelected').events.click();
+  assert.deepEqual(deletePayload, { filenames: ['课堂A.png', 'uploaded-b.png'] });
+  assert.equal(nodes.get('cutImageGrid').children.length, 1);
+  assert.equal(nodes.get('cutSelectionCount').textContent, '已选 1 张');
+  assert.equal(nodes.get('cutDeleteSelected').disabled, false, '失败项保留选中以便重试');
+  assert(nodes.get('cutImageStatus').textContent.includes('失败 1 张'));
+  failedDeleteName = null;
+  await nodes.get('cutDeleteSelected').events.click();
+  assert.equal(nodes.get('cutSelectionCount').textContent, '已选 0 张');
+  assert.equal(nodes.get('cutSelectAll').disabled, true);
+  assert.equal(nodes.get('cutInfer').disabled, true);
+  assert(nodes.get('cutImageGrid').innerHTML.includes('暂无图片'));
+  assert.equal(nodes.get('cutHeadGrid').children.length, 1, '管理待切割图片不应清空已保存裁剪');
   assert.equal(nodes.has('globalBanner'), false);
   console.log('ES module startup, navigation and result viewer checks passed (15 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
