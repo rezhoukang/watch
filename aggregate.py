@@ -47,6 +47,10 @@ BIND_RULE = ("链式贪心 + 一一对应：只保留 IoU > 0 的配对，按 Io
 FACE_BIND_RULE = ("链式贪心 + 一一对应：只保留 IoU > 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），"
                   "一个人头最多贴一个姓名、一张脸最多贴一个人头")
 
+# 人脸识别的两个下限（锁在，界面可调但不允许低于下限）
+MIN_FACE_CONFIDENCE = 0.5
+MIN_MATCH_THRESHOLD = 0.3
+
 # Windows 常见中文字体（找不到就退化为只写编号，避免姓名画成方块）
 FONT_CANDIDATES = (
     "C:/Windows/Fonts/msyh.ttc",
@@ -236,7 +240,7 @@ def render(image: np.ndarray, targets: list[dict]) -> Image.Image:
 
 def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
                     threshold: float = face_recognition.DEFAULT_MATCH_THRESHOLD,
-                    face_confidence: float = face_recognition.DETECT_CONFIDENCE,
+                    face_confidence: float = face_recognition.DEFAULT_QUALITY_CONFIDENCE,
                     min_confidence: float = face_recognition.DEFAULT_QUALITY_CONFIDENCE,
                     min_size: int = face_recognition.DEFAULT_MIN_FACE_PIXELS,
                     min_sharpness: float = face_recognition.DEFAULT_MIN_SHARPNESS,
@@ -245,10 +249,18 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
 
     目标检测没有参数——它就是「图片推理 → 目标检测」那一套；人脸识别与姿势检测由
     face / pose 两个开关决定要不要跑；绑定规则固定（链式贪心 + 一一对应 + IoU > 0）。
+    人脸置信度与识别阈值有下限（≥ 0.5 / ≥ 0.3），低于下限会被抬到下限，生效值回报在
+    steps.face.detect_confidence / steps.face.threshold 里。
     """
     started = time.perf_counter()
     if not math.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("识别阈值必须在 0 到 1 之间")
+    if not math.isfinite(face_confidence) or not 0 <= face_confidence <= 1:
+        raise ValueError("人脸置信度必须在 0 到 1 之间")
+    # 下限（锁在）：远景小脸给太低会放进模糊/侧脸，给太高又全被卡掉；少了这个闸门
+    # 一个手滑的 0.1 就会把噪声脸也拿去比对。
+    threshold = max(MIN_MATCH_THRESHOLD, float(threshold))
+    face_confidence = max(MIN_FACE_CONFIDENCE, float(face_confidence))
 
     image = read_image(src)
     height, width = image.shape[:2]

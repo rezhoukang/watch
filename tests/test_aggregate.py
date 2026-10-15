@@ -379,6 +379,19 @@ class AggregateApiTests(unittest.TestCase):
         # 人头框与人体框的 IoU 很小（≈0.2），但只要 > 0 就该绑上
         self.assertLess(record['steps']['pose']['bound'] and record['targets'][0]['poses'][0]['bind']['iou'], .3)
 
+    def test_face_confidence_and_threshold_are_floored(self):
+        """人脸置信度锁在 ≥ 0.5、识别阈值锁在 ≥ 0.3：低于下限抬到下限并回报生效值。"""
+        record = self.post(threshold=.1, face_confidence=.2).json()
+        self.assertEqual(record['steps']['face']['threshold'], aggregate.MIN_MATCH_THRESHOLD)
+        self.assertEqual(record['steps']['face']['detect_confidence'], aggregate.MIN_FACE_CONFIDENCE)
+        called = self.recognition.call_args.kwargs
+        self.assertEqual(called['threshold'], aggregate.MIN_MATCH_THRESHOLD)
+        self.assertEqual(called['detect_confidence'], aggregate.MIN_FACE_CONFIDENCE)
+        # 下限之上原样透传，不会被抬高
+        above = self.post(threshold=.45, face_confidence=.7).json()
+        self.assertEqual(above['steps']['face']['threshold'], .45)
+        self.assertEqual(above['steps']['face']['detect_confidence'], .7)
+
     def test_empty_library_is_reported(self):
         # 直接赋值会泄漏给同类里的后续用例（后面几个都要求人脸识别可用），必须登记还原
         self.patch('list_entries', Mock(return_value=[]))

@@ -16,12 +16,14 @@ class AggregateRequest(BaseModel):
 
     目标检测固定复用「图片推理 → 目标检测」；绑定固定为链式贪心 + 一一对应（IoU > 0）。
     人脸识别 / 姿势检测用勾选框控制是否参与。
+    人脸置信度与识别阈值有下限（≥ 0.5 / ≥ 0.3）：这里不设 ge 硬报错，
+    由 aggregate.aggregate_image 抬到下限并把生效值回报在 steps.face 里。
     """
     face: bool = True
     pose: bool = True
-    # 人脸识别
+    # 人脸识别（下限见 aggregate.MIN_FACE_CONFIDENCE / MIN_MATCH_THRESHOLD）
     threshold: float = Field(default=face_recognition.DEFAULT_MATCH_THRESHOLD, ge=0, le=1)
-    face_confidence: float = Field(default=face_recognition.DETECT_CONFIDENCE, ge=0.01, le=0.99)
+    face_confidence: float = Field(default=face_recognition.DEFAULT_QUALITY_CONFIDENCE, ge=0, le=1)
     min_confidence: float = Field(default=face_recognition.DEFAULT_QUALITY_CONFIDENCE, ge=0, le=1)
     min_size: int = Field(default=face_recognition.DEFAULT_MIN_FACE_PIXELS, ge=1, le=1000)
     min_sharpness: float = Field(default=face_recognition.DEFAULT_MIN_SHARPNESS, ge=0, le=10000)
