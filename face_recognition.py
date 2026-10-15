@@ -21,6 +21,8 @@ MODEL_PATH_RECOGNITION = Path(BASE_DIR) / "weight" / "scrfd" / "w600k_r50.onnx"
 LIBRARY_DIR = BASE_DIR / "output" / "face_library"
 LIBRARY_JSON = LIBRARY_DIR / "library.json"
 LIBRARY_NPZ = LIBRARY_DIR / "embeddings.npz"
+# 库内登记照：对齐后的人脸图，供识别结果里人工核对“这张脸对应的库里是谁”
+PHOTO_DIR = LIBRARY_DIR / "photos"
 INPUT_SIZE = 112
 
 # 学生花名册快照（编号→姓名）。仅在导入时使用，运行中以后台任务同步。
@@ -170,6 +172,7 @@ def add_entry(name: str, image: np.ndarray, source: str = "upload") -> dict:
         matrix = np.vstack([matrix, embedding[None, :]]) if matrix.size else embedding[None, :]
         _write_entries(entries)
         _write_embeddings(ids, matrix)
+    save_photo(entry_id, image, face["landmarks"])
     return {"id": entry_id, "name": name}
 
 
@@ -179,6 +182,45 @@ def _next_id(entries: dict[str, dict]) -> str:
     while index in used:
         index += 1
     return str(index).zfill(4)
+
+
+def photo_path(entry_id: str) -> Path | None:
+    """库内登记照路径。entry_id 只允许数字，防目录穿越。"""
+    if not isinstance(entry_id, str) or not re.fullmatch(r"\d{1,8}", entry_id):
+        return None
+    return PHOTO_DIR / f"{entry_id}.jpg"
+
+
+def save_photo(entry_id: str, image: np.ndarray, landmarks) -> bool:
+    """按五点对齐后存一张登记照（112px 输入尺度）。对齐失败则跳过，不影响入库。"""
+    target = photo_path(entry_id)
+    if target is None:
+        return False
+    try:
+        aligned = align_face(_to_bgr(image), landmarks)
+    except (ValueError, TypeError, cv2.error):
+        return False
+    target.parent.mkdir(parents=True, exist_ok=True)
+    ok, encoded = cv2.imencode(".jpg", aligned, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+    if not ok:
+        return False
+    encoded.tofile(str(target))
+    return True
+
+
+def photo_file(entry_id: str) -> Path | None:
+    """返回已存在的库内登记照；不存在或编号非法则 None。"""
+    with _lock:
+        if entry_id not in _load_entries():
+            return None
+    path = photo_path(entry_id)
+    return path if path is not None and path.is_file() else None
+
+
+def photo_url(entry_id: str) -> str | None:
+    """库内登记照的接口地址（无照片时 None）。"""
+    path = photo_path(entry_id)
+    return f"/api/face-library/{entry_id}/photo" if path is not None and path.is_file() else None
 
 
 def delete_entry(entry_id: str) -> bool:
@@ -191,7 +233,10 @@ def delete_entry(entry_id: str) -> bool:
         keep = [i for i, v in enumerate(ids) if v != entry_id]
         _write_entries(entries)
         _write_embeddings([ids[i] for i in keep], matrix[keep] if keep else np.zeros((0, 512), dtype=np.float32))
-        return True
+    path = photo_path(entry_id)
+    if path is not None and path.is_file():
+        path.unlink(missing_ok=True)
+    return True
 
 
 def _to_bgr(image) -> np.ndarray:
@@ -225,6 +270,7 @@ def match(embedding: np.ndarray, threshold: float = DEFAULT_MATCH_THRESHOLD) -> 
         "matched": best >= threshold,
         "entry_id": ids[index],
         "name": entry.get("name"),
+        "photo_url": photo_url(ids[index]),
         "similarity": round(best, 4),
     }
 
@@ -238,8 +284,52 @@ def match_top_k(embedding: np.ndarray, k: int = 3) -> list[dict]:
         return []
     scores = (matrix @ embedding.reshape(-1)).tolist()
     ranked = sorted(zip(ids, scores), key=lambda item: item[1], reverse=True)
-    return [{"entry_id": i, "name": entries.get(i, {}).get("name"),
+    return [{"entry_id": i, "name": entries.get(i, {}).get("name"), "photo_url": photo_url(i),
              "similarity": round(s, 4)} for i, s in ranked[:k]]
+
+
+# 冲突消解时每个脸取前 K 个候选参与分配（多留几个，便于被抢后往下顺延）
+CANDIDATE_K = 5
+
+
+# ------------------------------------------------------------------ 一对一冲突消解
+
+def resolve_one_to_one(candidates_by_face: dict[str, list[dict]], threshold: float) -> dict[str, dict]:
+    """把“多张脸抢同一个库内编号”按相似度降序贪心消解成一对一分配。
+
+    规则：
+    - 只有相似度 ≥ threshold 的候选才有资格参与分配；
+    - 所有 (脸，候选) 组合按相似度降序处理，**相似度高的先占**；
+    - 一个库内编号只能被一张脸占用；脸被抢后自动顺延到它的下一个候选，
+      再被抢就继续顺延（递归），直到没有可用候选 → 该脸判为未识别；
+    - 相似度完全并列时按传入顺序先到先得（list.sort 稳定），保证结果可复现。
+
+    返回 {face_id: {'assigned': 候选(含 rank) | None, 'skipped': [被占用的候选…]}}，
+    其中 skipped 里的 taken_by 记下是谁抢走的，便于界面解释。
+    """
+    pairs: list[tuple[float, str, int, dict]] = []
+    for face_id, candidates in candidates_by_face.items():
+        for rank, candidate in enumerate(candidates, 1):
+            if candidate.get("similarity", 0.0) >= threshold:
+                pairs.append((candidate["similarity"], face_id, rank, candidate))
+    pairs.sort(key=lambda item: item[0], reverse=True)
+
+    taken: dict[str, str] = {}
+    outcome = {face_id: {"assigned": None, "skipped": []} for face_id in candidates_by_face}
+    for similarity, face_id, rank, candidate in pairs:
+        if outcome[face_id]["assigned"] is not None:
+            continue  # 已经拿到了得分更高的候选
+        entry_id = candidate["entry_id"]
+        holder = taken.get(entry_id)
+        if holder is not None:
+            outcome[face_id]["skipped"].append({
+                "entry_id": entry_id, "name": candidate.get("name"),
+                "similarity": similarity, "rank": rank, "taken_by": holder,
+            })
+            continue
+        taken[entry_id] = face_id
+        outcome[face_id]["assigned"] = {**candidate, "rank": rank}
+    return outcome
 
 
 # ---------------------------------------------------------------- 学生花名册批量导入
@@ -261,9 +351,11 @@ def _load_student_names() -> dict[str, str]:
 def import_students(progress=None) -> dict:
     """把 2026_software_students/photos/*.jpeg 全部导入人脸库（编号→姓名）。
 
-    已存在的编号跳过（幂等）。progress 是可选回调 (done, total, message)。
+    已存在且已有登记照的编号跳过（幂等）；已入库但缺登记照的老条目会自动回填照片。
+    progress 是可选回调 (done, total, message)。
     兼容两种文件名：`001_示例姓名.jpeg`（带姓名）或 `001.jpeg`（纯编号）。
-    姓名优先取文件名，回退到 names.json。返回 {imported, skipped, existing, errors}。
+    姓名优先取文件名，回退到 names.json。
+    返回 {imported, skipped, photos_added, existing, errors, total}。
     """
     names = _load_student_names()
     photos = STUDENTS_PDF_DIR / "photos"
@@ -279,20 +371,25 @@ def import_students(progress=None) -> dict:
     with _lock:
         entries = _load_entries()
     existing = {int(k) for k in entries if k.isdigit() and int(k) <= 999}
-    imported, skipped, errors = 0, 0, []
+    imported, skipped, photos_added, errors = 0, 0, 0, []
     total = len(files)
     done = 0
     detector = _get_detector()
     for index in sorted(files, key=int):
         done += 1
         number = int(index)
-        if number in existing:
+        entry_id = str(index).zfill(4)
+        path, name_from_file = files[index]
+        name = (name_from_file or names.get(index, "")).strip()
+        already = number in existing
+        photo = photo_path(entry_id)
+        has_photo = photo is not None and photo.is_file()
+        # 已入库且已有登记照才算真正跳过；缺照片的老条目要回填
+        if already and has_photo:
             skipped += 1
             if progress:
                 progress(done, total, f"跳过已存在 {index} {names.get(index, '')}")
             continue
-        path, name_from_file = files[index]
-        name = (name_from_file or names.get(index, "")).strip()
         try:
             image = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)
             if image is None:
@@ -302,27 +399,31 @@ def import_students(progress=None) -> dict:
                 raise ValueError("未检测到人脸")
             faces.sort(key=lambda f: (f["bbox"][2] - f["bbox"][0]) * (f["bbox"][3] - f["bbox"][1]), reverse=True)
             face = faces[0]
-            embedding = extract_embedding(image, face["landmarks"])
-            with _lock:
-                entries = _load_entries()
-                entries[str(index).zfill(4)] = {
-                    "id": str(index).zfill(4), "name": name or f"学生{index}",
-                    "source": "students-2026", "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                ids, matrix = _load_embeddings()
-                entry_id = str(index).zfill(4)
-                ids = ids + [entry_id]
-                matrix = np.vstack([matrix, embedding[None, :]]) if matrix.size else embedding[None, :]
-                _write_entries(entries)
-                _write_embeddings(ids, matrix)
-            imported += 1
+            if not already:
+                embedding = extract_embedding(image, face["landmarks"])
+                with _lock:
+                    entries = _load_entries()
+                    entries[entry_id] = {
+                        "id": entry_id, "name": name or f"学生{index}",
+                        "source": "students-2026", "created_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    ids, matrix = _load_embeddings()
+                    ids = ids + [entry_id]
+                    matrix = np.vstack([matrix, embedding[None, :]]) if matrix.size else embedding[None, :]
+                    _write_entries(entries)
+                    _write_embeddings(ids, matrix)
+                imported += 1
+            if not has_photo:
+                if save_photo(entry_id, image, face["landmarks"]):
+                    photos_added += 1
             if progress:
-                progress(done, total, f"已导入 {index} {name}")
+                progress(done, total, f"{'已导入' if not already else '已补登记照'} {index} {name}")
         except Exception as exc:  # noqa: BLE001
             errors.append({"index": index, "name": name, "message": str(exc)})
             if progress:
                 progress(done, total, f"导入失败 {index} {name}：{exc}")
-    return {"imported": imported, "skipped": skipped, "existing": existing, "errors": errors, "total": total}
+    return {"imported": imported, "skipped": skipped, "photos_added": photos_added,
+            "existing": existing, "errors": errors, "total": total}
 
 
 # ---------------------------------------------------------------- 识别一个人脸裁剪

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=44">
+<link rel="stylesheet" href="/style.css?v=48">
 </head>
 <body>
 <div class="app">
@@ -73,7 +73,7 @@
         <div class="head-cut-controls">
           <label>批次 <select id="cutBatchSelect" aria-label="头切割批次"><option value="">暂无批次</option></select></label>
           <label>来源 <select id="cutSourceFilter" aria-label="裁剪来源"><option value="">全部图片</option></select></label>
-          <input id="cutSearch" placeholder="搜索编号、类别或标记" aria-label="搜索裁剪图">
+          <input id="cutSearch" placeholder="搜索编号或类别" aria-label="搜索裁剪图">
           <label>人脸置信度 ≥ <input id="cutFaceConfidence" type="number" min="0.01" max="0.99" step="0.05" value="0.5"></label>
           <button id="cutDetectFaces" class="btn small" disabled title="检测当前批次 crops/ 中的全部原始裁剪图">批量检测人脸</button>
           <button id="cutFaceCancel" class="btn small ghost" hidden>取消人脸检测</button>
@@ -369,6 +369,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=72"></script>
+<script type="module" src="/app.js?v=76"></script>
 </body>
 </html>

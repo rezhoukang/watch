@@ -63,9 +63,8 @@ def read_run(run_id: str) -> dict:
                 per_crop = recognized['results'].get(item['crop_id'], {'status': 'pending'})
                 names = []
                 for face in per_crop.get('faces', []):
-                    first = (face.get('faces') or [{}])[0]
-                    if first.get('status') == 'matched' and first.get('match', {}).get('name'):
-                        names.append(first['match']['name'])
+                    if face.get('status') == 'matched' and (face.get('match') or {}).get('name'):
+                        names.append(face['match']['name'])
                 item['recognition'] = dict(per_crop, name='、'.join(names))
         return record
 

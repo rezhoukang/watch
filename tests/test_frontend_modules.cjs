@@ -86,7 +86,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(calls.includes('/api/inferences'));
   assert(calls.includes('/api/head-cuts'));
   const cutRunId = 'f'.repeat(32);
-  let cutStarted = false, cutPayload, markPayload;
+  let cutStarted = false, cutPayload;
   responses['/api/images'] = { images: [{ filename: '课堂A.png', url: '/images/a.png' }] };
   responses['/api/head-cuts'] = options => {
     if (options.method === 'POST') { cutPayload = JSON.parse(options.body); cutStarted = true; return { run_id: cutRunId }; }
@@ -98,7 +98,6 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     crops: [{ crop_id: 'HC001-001', source: '课堂A.png', class_name: 'head', confidence: .9,
       crop_bbox: [1, 2, 3, 4], raw_file: 'crops/HC001-001.png', marked_file: 'marked/HC001-001.png', mark: '' }],
   };
-  responses[`/api/head-cuts/${cutRunId}/marks`] = options => { markPayload = JSON.parse(options.body); return { ok: true }; };
   await modules.get(path.join(root, 'js/head-cuts.js')).namespace.loadHeadCuts();
   nodes.get('cutSelectAll').checked = true;
   nodes.get('cutSelectAll').events.change({ target: nodes.get('cutSelectAll') });
@@ -107,9 +106,8 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(cutPayload, { filenames: ['课堂A.png'], rtdetr_base: false, merge_iou: .1, merge_confidence: .55 });
   assert.equal(nodes.get('cutHeadGrid').children.length, 1);
   assert(nodes.get('cutHeadGrid').children[0].innerHTML.includes('HC001-001'));
-  const markInput = nodes.get('cutHeadGrid').children[0].children.at(-1).children[0];
-  markInput.value = '已核对'; await markInput.events.change();
-  assert.deepEqual(markPayload, { marks: { 'HC001-001': '已核对' } });
+  assert(nodes.get('cutHeadGrid').children[0].children.every(child => child.type !== 'text' && !child.children.some(input => input.type === 'text')),
+    '头管理卡片不应包含人工备注输入框');
   let facePayload;
   responses[`/api/head-cuts/${cutRunId}/faces`] = options => {
     facePayload = JSON.parse(options.body);
@@ -122,7 +120,9 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   await nodes.get('cutDetectFaces').events.click();
   assert.deepEqual(facePayload, { confidence: .5 });
   assert(nodes.get('cutFaceProgress').textContent.includes('人脸检测完成'));
-  assert(nodes.get('cutHeadGrid').children[0].children.some(node => node.innerHTML.includes('HC001-001_F01')));
+  const faceStrip = nodes.get('cutHeadGrid').children[0].children.find(node => node.className === 'head-face-strip');
+  assert(faceStrip.innerHTML.includes('HC001-001_F01') && !faceStrip.innerHTML.includes('<img'),
+    '人脸结果保留文字信息，不重复显示照片');
   nodes.get('cutFaceFilter').value = 'no_face'; nodes.get('cutFaceFilter').events.change();
   assert.equal(nodes.get('cutHeadGrid').children.length, 0);
   nodes.get('cutFaceFilter').value = ''; nodes.get('cutFaceFilter').events.change();
@@ -136,7 +136,8 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     record.recognition = { job_id: 'rec-job', status: 'done', progress: 1, total: 1, config: { threshold: .4 }, message: '识别完成' };
     record.crops[0].recognition = { crop_id: 'HC001-001', status: 'done', name: '张三',
       faces: [{ face_id: 'HC001-001_F01', status: 'matched', face_pixels: 26,
-        match: { matched: true, entry_id: '0001', name: '张三', similarity: .95 } }] };
+        match: { matched: true, entry_id: '0001', name: '张三', similarity: .95,
+          photo_url: '/api/face-library/0001/photo' } }] };
     return { job_id: 'rec-job', run_id: cutRunId };
   };
   await nodes.get('cutRecognizeFaces').events.click();
@@ -153,6 +154,11 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert(nodes.get('cutFaceProgress').textContent.includes('识别完成'));
   const recFigure = nodes.get('cutHeadGrid').children[0];
   assert(recFigure.children.some(node => node.innerHTML.includes('rec-hit') && node.innerHTML.includes('张三')));
+  // 命中的要把人像库登记照放在右侧
+  const hitHtml = recFigure.children.map(node => node.innerHTML).join('');
+  assert(hitHtml.includes('rec-lib'), '命中项应包含库内登记照');
+  assert(hitHtml.includes('/api/face-library/0001/photo'), '登记照应指向人脸库照片接口');
+  assert(hitHtml.indexOf('rec-query') < hitHtml.indexOf('rec-lib'), '登记照应在查询脸右侧');
   nodes.get('cutRecFilter').value = 'matched'; nodes.get('cutRecFilter').events.change();
   assert.equal(nodes.get('cutHeadGrid').children.length, 1);
   nodes.get('cutRecFilter').value = 'unknown'; nodes.get('cutRecFilter').events.change();
@@ -165,6 +171,30 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   nodes.get('cutRecFilter').value = 'unknown'; nodes.get('cutRecFilter').events.change();
   assert.equal(nodes.get('cutHeadGrid').children.length, 1, '未识别筛选应包含质量不足的裁剪');
   assert(nodes.get('cutHeadGrid').children[0].children.some(node => node.innerHTML.includes('rec-skip')));
+  nodes.get('cutRecFilter').value = ''; nodes.get('cutRecFilter').events.change();
+  // 顺延到备选：标注是第几个候选，并在提示里说明被谁抢走，同时仍显示对应登记照
+  responses[`/api/head-cuts/${cutRunId}`].crops[0].recognition = { crop_id: 'HC001-001', status: 'done', name: '王五',
+    faces: [{ face_id: 'HC001-001_F01', status: 'matched', face_pixels: 26,
+      match: { matched: true, entry_id: '0005', name: '王五', similarity: .45, rank: 2,
+        photo_url: '/api/face-library/0005/photo' },
+      conflict: { skipped: [{ entry_id: '0001', name: '张三', similarity: .55, rank: 1, taken_by: 'HC001-009_F01' }] } }] };
+  await modules.get(path.join(root, 'js/head-cuts.js')).namespace.loadHeadCuts();
+  await flush();
+  const rankHtml = nodes.get('cutHeadGrid').children[0].children.map(node => node.innerHTML).join('');
+  assert(rankHtml.includes('rec-rank'), '顺延到备选应标注是第几个候选');
+  assert(rankHtml.includes('备选#2'), '应显示备选序号');
+  assert(rankHtml.includes('HC001-009_F01'), '提示里应说明被哪张脸抢走');
+  assert(rankHtml.includes('/api/face-library/0005/photo'), '备选命中也要显示对应登记照');
+  // 未识别：候选被别的脸占用时给出可追溯的原因
+  responses[`/api/head-cuts/${cutRunId}`].crops[0].recognition = { crop_id: 'HC001-001', status: 'done', name: '',
+    faces: [{ face_id: 'HC001-001_F01', status: 'unknown', face_pixels: 26,
+      match: { matched: false, entry_id: '0001', name: '张三', similarity: .55, reason: 'taken' },
+      conflict: { skipped: [{ entry_id: '0001', name: '张三', similarity: .55, rank: 1, taken_by: 'HC001-009_F01' }] } }] };
+  await modules.get(path.join(root, 'js/head-cuts.js')).namespace.loadHeadCuts();
+  await flush();
+  const takenHtml = nodes.get('cutHeadGrid').children[0].children.map(node => node.innerHTML).join('');
+  assert(takenHtml.includes('未识别'), '被抢占后没有可用备选应判为未识别');
+  assert(takenHtml.includes('已被得分更高的另一张脸占用'), '未识别要说明是候选被抢占');
   nodes.get('cutRecFilter').value = ''; nodes.get('cutRecFilter').events.change();
   assert.equal(nodes.get('envStatus').className, 'badge ok');
   responses['/test-chart.json'] = { head_counts: [[100, 2], [150, 8], [200, 5]], fps: 25, start_frame: 100 };

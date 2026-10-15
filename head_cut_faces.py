@@ -187,7 +187,8 @@ def start_recognition(run_id: str, threshold: float = 0.40,
                              'min_sharpness': min_sharpness,
                              'library_count': len(face_recognition.list_entries())},
                   'total': sum(len(c['faces']) for c in crops), 'progress': 0,
-                  'matched': 0, 'unknown': 0, 'rejected': 0, 'results': {}, 'errors': []}
+                  'matched': 0, 'unknown': 0, 'rejected': 0, 'reassigned': 0, 'conflicts': 0,
+                  'results': {}, 'errors': []}
         _save_recognition(run_id, record)
         vision.JOBS[job_id] = {'id': job_id, 'type': 'head_face_recognition', 'run_id': run_id,
                                'status': 'running', 'total': record['total'], 'progress': 0, 'message': record['message']}
@@ -209,9 +210,12 @@ def _run_recognition(run_id: str, job_id: str, crops: list[dict], record: dict, 
             folder = head_cuts.run_dir(run_id)
             record['status'] = 'running'
             _save_recognition(run_id, record)
+            # 第一阶段：逐张裁剪做质量筛选、提特征、取候选（结论留到第二阶段统一定）
+            candidates_by_face: dict[str, list[dict]] = {}
+            cancelled = False
             for crop in crops:
                 if job.get('cancel'):
-                    record.update(status='cancelled', message='已取消人脸识别，已生成结果保留')
+                    cancelled = True
                     break
                 # 打开 HC 裁剪图：face 的 bbox/landmarks 都相对它，
                 # 若改用单张人脸裁剪图（faces/…png）则坐标系不一致，会导致质量取样和对齐都错位。
@@ -236,22 +240,13 @@ def _run_recognition(run_id: str, job_id: str, crops: list[dict], record: dict, 
                             record['rejected'] += 1
                             per_face.append({'face_id': face['face_id'], 'status': 'rejected',
                                              'reasons': reasons, 'face_pixels': face_pixels,
-                                             'quality': quality, 'faces': []})
+                                             'quality': quality})
                         elif landmarks:
                             embedding = face_recognition.extract_embedding(source, landmarks)
-                            match_result = face_recognition.match(embedding, threshold)
-                            per_face.append({
-                                'face_id': face['face_id'],
-                                'status': 'matched' if match_result['matched'] else 'unknown',
-                                'match': match_result,
-                                'face_pixels': face_pixels,
-                                'candidates': face_recognition.match_top_k(embedding, k=3),
-                                'faces': [{'status': 'matched' if match_result['matched'] else 'unknown', 'match': match_result}] if match_result['matched'] else [{'status': 'unknown', 'match': match_result}],
-                            })
-                            if match_result['matched']:
-                                record['matched'] += 1
-                            else:
-                                record['unknown'] += 1
+                            candidates = face_recognition.match_top_k(embedding, k=face_recognition.CANDIDATE_K)
+                            candidates_by_face[face['face_id']] = candidates
+                            per_face.append({'face_id': face['face_id'], 'status': 'pending',
+                                             'face_pixels': face_pixels, 'candidates': candidates})
                         else:
                             per_face.append({'face_id': face['face_id'], 'status': 'error', 'message': '缺少人脸关键点'})
                     except Exception as exc:  # noqa: BLE001
@@ -263,10 +258,39 @@ def _run_recognition(run_id: str, job_id: str, crops: list[dict], record: dict, 
                 record['results'][crop['crop_id']] = {'crop_id': crop['crop_id'], 'status': 'done', 'faces': per_face}
                 if record['progress'] % 5 == 0:
                     _save_recognition(run_id, record)
+
+            # 第二阶段：一对一消解——同一库内编号只给得分最高的那张脸，被抢的脸顺延到下一个候选
+            resolution = face_recognition.resolve_one_to_one(candidates_by_face, threshold)
+            for info in record['results'].values():
+                for entry in info['faces']:
+                    if entry.get('status') != 'pending':
+                        continue
+                    outcome = resolution.get(entry['face_id']) or {'assigned': None, 'skipped': []}
+                    assigned = outcome['assigned']
+                    best = (entry.get('candidates') or [None])[0]
+                    entry['conflict'] = {'skipped': outcome['skipped']}
+                    if assigned is not None:
+                        entry['status'] = 'matched'
+                        entry['match'] = {**assigned, 'matched': True}
+                        record['matched'] += 1
+                        if assigned['rank'] > 1:
+                            record['reassigned'] += 1
+                    else:
+                        entry['status'] = 'unknown'
+                        entry['match'] = {**(best or {}), 'matched': False,
+                                          'reason': 'taken' if outcome['skipped'] else 'below_threshold'}
+                        record['unknown'] += 1
+                    if outcome['skipped']:
+                        record['conflicts'] += 1
+
+            if cancelled:
+                record.update(status='cancelled', message='已取消人脸识别，已生成结果保留')
             else:
                 record.update(status='done_with_errors' if record['errors'] else 'done',
                               message=(f'人脸识别完成：命中 {record["matched"]}，未识别 {record["unknown"]}，'
-                                       f'质量门槛拒绝 {record.get("rejected", 0)}'))
+                                       f'质量门槛拒绝 {record.get("rejected", 0)}；'
+                                       f'同一人被多张脸命中已消解 {record.get("conflicts", 0)} 处，'
+                                       f'顺延到备选 {record.get("reassigned", 0)} 张'))
     except Exception as exc:
         record.update(status='failed', message=f'人脸识别失败：{exc}')
     finally:

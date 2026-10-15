@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import face_recognition
@@ -53,6 +54,15 @@ def delete_library_entry(entry_id: str) -> dict:
     if not face_recognition.delete_entry(entry_id):
         raise HTTPException(status_code=404, detail="人脸库中不存在该编号")
     return {"ok": True}
+
+
+@router.get("/api/face-library/{entry_id}/photo", summary="人脸库登记照")
+def library_photo(entry_id: str):
+    """返回库内该人的登记照（对齐后的人脸图），供识别结果人工核对。"""
+    path = face_recognition.photo_file(entry_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="该编号没有登记照")
+    return FileResponse(path, media_type="image/jpeg")
 
 
 @router.post("/api/face-library/import-students", summary="导入2026软件学生花名册")

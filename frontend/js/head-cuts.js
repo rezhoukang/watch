@@ -1,4 +1,4 @@
-import { el, esc, api, showError } from './core.js?v=72';
+import { el, esc, api, showError } from './core.js?v=76';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;
@@ -125,7 +125,7 @@ function renderHeads() {
   const filtered = record.crops.filter(c => (!source || c.source === source) &&
     (!faceFilter || (c.face_detection?.status || 'pending') === faceFilter) &&
     (!recFilter || recStatusOf(c) === recFilter) &&
-    `${c.crop_id} ${c.class_name} ${c.mark || ''} ${c.recognition?.name || ''}`.toLowerCase().includes(search));
+    `${c.crop_id} ${c.class_name} ${c.recognition?.name || ''}`.toLowerCase().includes(search));
   const pages = Math.max(1, Math.ceil(filtered.length/PAGE_SIZE));
   page = Math.min(page, pages-1);
   el('cutHeadCount').textContent = `共 ${record.crop_count} 个裁剪 · 当前筛选 ${filtered.length} 个 · 已处理 ${record.progress}/${record.total} 张`;
@@ -136,7 +136,6 @@ function renderHeads() {
     previews.appendChild(link);
   }
   const grid = el('cutHeadGrid');
-  if (document.activeElement && grid.contains(document.activeElement)) return;
   grid.innerHTML = '';
   for (const crop of filtered.slice(page*PAGE_SIZE, (page+1)*PAGE_SIZE)) {
     const figure = document.createElement('figure');
@@ -152,19 +151,36 @@ function renderHeads() {
       const recByFace = {};
       for (const item of (recognition?.faces || [])) recByFace[item.face_id] = item;
       const sizeNote = rec => (rec?.face_pixels ? `｜人脸 ${rec.face_pixels}px` : '');
-      faces.innerHTML = detection.faces.map(face => {
+      // 一对一消解：被别的脸抢走的候选，在提示里说明是谁抢的
+      const conflictNote = rec => {
+        const skipped = rec?.conflict?.skipped || [];
+        if (!skipped.length) return '';
+        return '｜被抢占的候选：' + skipped.map(s => `${s.name}(${s.similarity}) 给了 ${s.taken_by}`).join('；');
+      };
+      faces.innerHTML = detection.faces.map((face, index) => {
         const rec = recByFace[face.face_id];
         let badge = '';
         if (rec?.status === 'matched') {
-          badge = `<em class="rec-badge rec-hit" title="相似度 ${rec.match?.similarity}${sizeNote(rec)}">${esc(rec.match?.name || '')} ${rec.match?.similarity}</em>`;
+          const rank = rec.match?.rank || 1;
+          const rankTag = rank > 1 ? ` <i class="rec-rank">备选#${rank}</i>` : '';
+          const rankNote = rank > 1 ? `｜第 1 候选被抢占，顺延到第 ${rank} 候选` : '';
+          badge = `<em class="rec-badge rec-hit" title="相似度 ${rec.match?.similarity}${rankNote}${conflictNote(rec)}${sizeNote(rec)}">${esc(rec.match?.name || '')} ${rec.match?.similarity}${rankTag}</em>`;
         } else if (rec?.status === 'rejected') {
           badge = `<em class="rec-badge rec-skip" title="${esc((rec.reasons || []).join('；'))}${sizeNote(rec)}">质量不足</em>`;
         } else if (rec?.status === 'unknown') {
-          badge = `<em class="rec-badge" title="最高相似度 ${rec.match?.similarity}${sizeNote(rec)}">未识别</em>`;
+          const why = rec.match?.reason === 'taken'
+            ? `最高候选 ${rec.match?.name} 已被得分更高的另一张脸占用，且没有可用备选`
+            : '最高候选相似度不足';
+          badge = `<em class="rec-badge" title="${esc(why + conflictNote(rec))}｜最高 ${rec.match?.similarity}${sizeNote(rec)}">未识别</em>`;
         } else if (rec?.status === 'error') {
           badge = `<em class="rec-badge rec-skip" title="${esc(rec.message || '')}">识别失败</em>`;
         }
-        return `<a href="${esc(fileUrl(record.run_id, face.file))}" target="_blank"><img src="${esc(fileUrl(record.run_id, face.file))}" alt="${esc(face.face_id)}" loading="lazy"><small>${Number(face.confidence).toFixed(2)}</small>${badge}</a>`;
+        const query = `<a class="rec-query" href="${esc(fileUrl(record.run_id, face.file))}" target="_blank"><small title="${esc(face.face_id)}">人脸 ${index+1} · ${Number(face.confidence).toFixed(2)}</small>${badge}</a>`;
+        // 命中时把人像库里的对应登记照放在右侧，便于人工核对是否同一个人
+        const lib = (rec?.status === 'matched' && rec.match?.photo_url)
+          ? `<span class="rec-pair-arrow" aria-hidden="true">→</span><a class="rec-lib" href="${esc(rec.match.photo_url)}" target="_blank" title="人像库登记照：${esc(rec.match.name || '')}（编号 ${esc(rec.match.entry_id || '')}）"><img src="${esc(rec.match.photo_url)}" alt="${esc(rec.match.name || '')} 登记照" loading="lazy"><em>库内登记照</em></a>`
+          : '';
+        return `<div class="rec-item">${query}${lib}</div>`;
       }).join('');
       figure.appendChild(faces);
       if (detection.annotated_file) {
@@ -172,18 +188,7 @@ function renderHeads() {
         link.href = fileUrl(record.run_id, detection.annotated_file); link.target = '_blank'; figure.appendChild(link);
       }
     }
-    const label = document.createElement('label'); label.textContent = '标记 ';
-    const input = document.createElement('input'); input.type = 'text'; input.maxLength = 80; input.value = crop.mark || '';
-    input.placeholder = '可填写备注'; input.setAttribute('aria-label', `${crop.crop_id} 标记`);
-    input.addEventListener('change', async () => {
-      input.disabled = true;
-      try {
-        await api(`/api/head-cuts/${record.run_id}/marks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ marks: { [crop.crop_id]: input.value } }) });
-        crop.mark = input.value.trim();
-      } catch (error) { showError(el('cutProgress'), error, '保存标记失败'); }
-      finally { input.disabled = false; }
-    });
-    label.appendChild(input); figure.appendChild(label); grid.appendChild(figure);
+    grid.appendChild(figure);
   }
   el('cutPageInfo').textContent = `${page+1} / ${pages}`;
   el('cutPreviousPage').disabled = page === 0;

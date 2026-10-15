@@ -25,6 +25,7 @@ class FaceRecognitionTests(unittest.TestCase):
             (face_recognition, 'LIBRARY_DIR', self.root / 'face_library'),
             (face_recognition, 'LIBRARY_JSON', self.root / 'face_library' / 'library.json'),
             (face_recognition, 'LIBRARY_NPZ', self.root / 'face_library' / 'embeddings.npz'),
+            (face_recognition, 'PHOTO_DIR', self.root / 'face_library' / 'photos'),
         ):
             mocked = patch.object(module, field, value); mocked.start(); self.addCleanup(mocked.stop)
         self.client = TestClient(app.app)
@@ -55,6 +56,34 @@ class FaceRecognitionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 face_recognition.add_entry('测试', blank)
 
+    def test_add_entry_stores_photo_and_serves_it(self):
+        """入库时保存对齐后的登记照，可通过接口取回；删除时一并清理。"""
+        import numpy as np
+        image = np.random.default_rng(3).integers(0, 255, (120, 120, 3), dtype=np.uint8)
+        face = {'bbox': [20, 20, 100, 110], 'confidence': .95,
+                'landmarks': [[40, 50], [80, 50], [60, 62], [45, 85], [75, 85]]}
+        detector = Mock(); detector.detect.return_value = [face]
+        embedding = np.ones(512, dtype=np.float32) / np.sqrt(512)
+        with patch.object(face_recognition, '_get_detector', return_value=detector), \
+                patch.object(face_recognition, 'extract_embedding', return_value=embedding):
+            created = face_recognition.add_entry('测试同学', image)
+        entry_id = created['id']
+        self.assertIsNotNone(face_recognition.photo_file(entry_id))
+        response = self.client.get(f'/api/face-library/{entry_id}/photo')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers['content-type'], 'image/jpeg')
+        # 列表里也带上可用的照片地址
+        entries = self.client.get('/api/face-library').json()['entries']
+        self.assertEqual(entries[0]['id'], entry_id)
+        self.assertTrue(face_recognition.delete_entry(entry_id))
+        self.assertIsNone(face_recognition.photo_file(entry_id))
+        self.assertEqual(self.client.get(f'/api/face-library/{entry_id}/photo').status_code, 404)
+
+    def test_photo_endpoint_rejects_unknown_or_illegal_id(self):
+        self.assertEqual(self.client.get('/api/face-library/9999/photo').status_code, 404)
+        self.assertEqual(self.client.get('/api/face-library/abc/photo').status_code, 404)
+        self.assertIsNone(face_recognition.photo_path('../../etc/passwd'))
+
 
 class RecognitionTaskTests(unittest.TestCase):
     def setUp(self):
@@ -69,6 +98,7 @@ class RecognitionTaskTests(unittest.TestCase):
             (face_recognition, 'LIBRARY_DIR', self.root / 'face_library'),
             (face_recognition, 'LIBRARY_JSON', self.root / 'face_library' / 'library.json'),
             (face_recognition, 'LIBRARY_NPZ', self.root / 'face_library' / 'embeddings.npz'),
+            (face_recognition, 'PHOTO_DIR', self.root / 'face_library' / 'photos'),
         ):
             mocked = patch.object(module, field, value); mocked.start(); self.addCleanup(mocked.stop)
         source = self.root / 'image.png'
@@ -199,6 +229,112 @@ class RecognitionTaskTests(unittest.TestCase):
         for bad in ({'min_confidence': 1.5}, {'min_confidence': -0.1}, {'min_size': 0}, {'min_sharpness': -1}):
             response = self.client.post(f'/api/head-cuts/{self.run_id}/recognize', json={'threshold': .4, **bad})
             self.assertEqual(response.status_code, 422, f'{bad} 应被拒绝：{response.text}')
+
+    def test_recognize_resolves_duplicate_identity_one_to_one(self):
+        """两张脸都指向同一个人时高分优先，另一张顺延到它的下一个候选。"""
+        import numpy as np
+        self._seed_faces()
+        face_recognition.list_entries = Mock(return_value=[{'id': '0001', 'name': '张三'}])
+        face_recognition.extract_embedding = Mock(return_value=np.ones(512, dtype=np.float32) / np.sqrt(512))
+        face_recognition.assess_quality = Mock(return_value=([], {'sharpness': 100}))
+        # 第 1 张脸最高分 .55；第 2 张脸的候选分更高（.62）→ 它应该抢走 0001
+        face_recognition.match_top_k = Mock(side_effect=[
+            [self._candidate('0001', '张三', .55), self._candidate('0002', '李四', .45)],
+            [self._candidate('0001', '张三', .62)],
+        ])
+        batch = head_cuts.read_run(self.run_id)
+        raw = batch['crops'][0]['raw_file']
+
+        def face(face_id):
+            return {'face_id': face_id, 'confidence': .9, 'bbox': [2, 3, 12, 16],
+                    'landmarks': [[3, 5], [8, 5], [5, 9], [4, 11], [7, 11]]}
+
+        crops = [{'crop_id': 'HC001-001', 'raw_file': raw, 'faces': [face('HC001-001_F01')]},
+                 {'crop_id': 'HC001-002', 'raw_file': raw, 'faces': [face('HC001-002_F01')]}]
+        with patch.object(head_cut_faces.threading, 'Thread'):
+            response = self.client.post(f'/api/head-cuts/{self.run_id}/recognize', json={'threshold': .4})
+        self.assertEqual(response.status_code, 200, response.text)
+        job_id = response.json()['job_id']
+        self.addCleanup(vision.JOBS.pop, job_id, None)
+        record = json.loads((head_cuts.run_dir(self.run_id) / 'recognition.json').read_text(encoding='utf-8'))
+        head_cut_faces._run_recognition(self.run_id, job_id, crops, record, 0.4)
+        result = json.loads((head_cuts.run_dir(self.run_id) / 'recognition.json').read_text(encoding='utf-8'))
+        loser = result['results']['HC001-001']['faces'][0]
+        winner = result['results']['HC001-002']['faces'][0]
+        self.assertEqual(winner['match']['entry_id'], '0001')
+        self.assertEqual(winner['match']['rank'], 1)
+        # 被抢的那张顺延到第 2 候选，并记录是谁抢走的
+        self.assertEqual(loser['status'], 'matched')
+        self.assertEqual(loser['match']['entry_id'], '0002')
+        self.assertEqual(loser['match']['rank'], 2)
+        self.assertEqual(loser['conflict']['skipped'][0]['taken_by'], 'HC001-002_F01')
+        self.assertEqual(result['matched'], 2)
+        self.assertEqual(result['reassigned'], 1)
+        self.assertEqual(result['conflicts'], 1)
+
+    @staticmethod
+    def _candidate(entry_id, name, similarity):
+        return {'entry_id': entry_id, 'name': name,
+                'photo_url': f'/api/face-library/{entry_id}/photo', 'similarity': similarity}
+
+
+class OneToOneResolutionTests(unittest.TestCase):
+    """一对一消解：同一库内编号只给得分最高的脸，被抢的顺延到下一个候选，都没有就算未识别。"""
+
+    @staticmethod
+    def _cand(entry_id, name, similarity):
+        return {'entry_id': entry_id, 'name': name,
+                'photo_url': f'/api/face-library/{entry_id}/photo', 'similarity': similarity}
+
+    def test_higher_similarity_wins_and_loser_falls_back(self):
+        outcome = face_recognition.resolve_one_to_one({
+            'F1': [self._cand('0001', '甲', .50), self._cand('0002', '乙', .45)],
+            'F2': [self._cand('0001', '甲', .60)],
+        }, threshold=.4)
+        self.assertEqual(outcome['F2']['assigned']['entry_id'], '0001')
+        self.assertEqual(outcome['F2']['assigned']['rank'], 1)
+        self.assertEqual(outcome['F1']['assigned']['entry_id'], '0002')
+        self.assertEqual(outcome['F1']['assigned']['rank'], 2)
+        self.assertEqual(outcome['F1']['skipped'][0]['entry_id'], '0001')
+        self.assertEqual(outcome['F1']['skipped'][0]['taken_by'], 'F2')
+
+    def test_face_without_alternative_stays_unassigned(self):
+        outcome = face_recognition.resolve_one_to_one({
+            'F1': [self._cand('0001', '甲', .50)],
+            'F2': [self._cand('0001', '甲', .60)],
+        }, threshold=.4)
+        self.assertIsNotNone(outcome['F2']['assigned'])
+        self.assertIsNone(outcome['F1']['assigned'])
+        self.assertEqual(outcome['F1']['skipped'][0]['taken_by'], 'F2')
+
+    def test_fallback_only_counts_candidates_above_threshold(self):
+        """备选低于阈值时不能顺延过去，直接算未识别。"""
+        outcome = face_recognition.resolve_one_to_one({
+            'F1': [self._cand('0001', '甲', .50), self._cand('0002', '乙', .30)],
+            'F2': [self._cand('0001', '甲', .60)],
+        }, threshold=.4)
+        self.assertIsNone(outcome['F1']['assigned'])
+
+    def test_recursive_fallback_to_third_candidate(self):
+        outcome = face_recognition.resolve_one_to_one({
+            'F1': [self._cand('0001', '甲', .50), self._cand('0002', '乙', .45), self._cand('0003', '丙', .42)],
+            'F2': [self._cand('0001', '甲', .70)],
+            'F3': [self._cand('0002', '乙', .65)],
+        }, threshold=.4)
+        self.assertEqual(outcome['F1']['assigned']['entry_id'], '0003')
+        self.assertEqual(outcome['F1']['assigned']['rank'], 3)
+        self.assertEqual([s['entry_id'] for s in outcome['F1']['skipped']], ['0001', '0002'])
+
+    def test_same_entry_never_assigned_twice(self):
+        outcome = face_recognition.resolve_one_to_one({
+            'F1': [self._cand('0001', '甲', .80)],
+            'F2': [self._cand('0001', '甲', .70)],
+            'F3': [self._cand('0001', '甲', .60)],
+        }, threshold=.4)
+        assigned = [o['assigned']['entry_id'] for o in outcome.values() if o['assigned']]
+        self.assertEqual(assigned, ['0001'])
+        self.assertEqual(outcome['F1']['assigned']['similarity'], .80)
+        self.assertEqual(len(outcome['F2']['skipped']) + len(outcome['F3']['skipped']), 2)
 
 
 class QualityGateTests(unittest.TestCase):
