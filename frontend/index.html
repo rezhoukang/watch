@@ -318,13 +318,12 @@
   <!-- ========== 聚合推理（待推理图片 → 目标检测 → 人脸识别 → 姿势检测绑定）========== -->
   <section class="panel" id="tab-aggregate">
     <div class="toolbar">
-      <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别</label>
-      <label title="下限 0.5：低于下限会自动抬到 0.5">人脸置信度 ≥ <input type="number" id="aggFaceConfidence" value="0.5" min="0.5" max="0.99" step="0.05"></label>
-      <label title="下限 0.3：低于下限会自动抬到 0.3">识别阈值 ≥ <input type="number" id="aggRecThreshold" value="0.4" min="0.3" max="1" step="0.01"></label>
+      <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别（固定配置）</label>
       <label><input type="checkbox" id="aggPose" checked> 姿势检测（固定配置）</label>
     </div>
+    <p class="hint">人脸识别固定：SCRFD 人脸置信度 0.5 · 识别阈值 0.3 · 质量门槛 0.5 / 24px / 50（已锁死，不开放输入）。</p>
     <p class="hint">姿势检测固定：yolov8m-pose.pt · 置信度 0.6 · imgsz 640 · 低头 R &lt; 0.05 · 抬头 R &gt; 0.20 · 全图物体检测与关联（Pose 框）开启 · 物体置信度 ≥ 0.03。举手优先，无法判断的姿势直接排除。</p>
-    <p class="hint">目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.55（已锁死，前端不开放）。<b>人脸置信度锁在 ≥ 0.5、识别阈值锁在 ≥ 0.3</b>（可往上调，低于下限会自动抬到下限）。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
+    <p class="hint">目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.55（已锁死，前端不开放）。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
 
     <nav class="subnav">
       <button class="subtab active" data-agg="images">待推理图片</button>
@@ -413,6 +412,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=87"></script>
+<script type="module" src="/app.js?v=88"></script>
 </body>
 </html>

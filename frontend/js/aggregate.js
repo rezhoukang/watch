@@ -1,6 +1,6 @@
-import { el, esc, api, showError } from './core.js?v=87';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=87';
-import { classColor } from './viewer.js?v=87';
+import { el, esc, api, showError } from './core.js?v=88';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=88';
+import { classColor } from './viewer.js?v=88';
 
 /* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
@@ -13,32 +13,16 @@ const FILTERS = [
   { key: 'posed', label: '已绑姿势' },
 ];
 const AGG_PANES = { images: 'aggregate-pane-images', result: 'aggregate-pane-result' };
-// 与后端 aggregate.MIN_FACE_CONFIDENCE / MIN_MATCH_THRESHOLD 同源：低于下限会被抬到下限
-const FACE_CONFIDENCE_FLOOR = 0.5;
-const MATCH_THRESHOLD_FLOOR = 0.3;
 let ACTIVE_RECORD = null;
 let ACTIVE_FILTER = 'all';
 let ALWAYS_TAGS = false;
 
-/** 读取带下限的参数：低于下限抬到下限（并回写输入框，界面显示的就是实际生效值），超上限报错。 */
-function readFloored(id, floor, upper, label, fallback) {
-  const value = Number(el(id).value || fallback);
-  if (!Number.isFinite(value) || value > upper) throw new Error(`${label}必须在 ${floor} 到 ${upper} 之间`);
-  const effective = Math.max(floor, value);
-  el(id).value = String(effective);
-  return effective;
-}
-
-/** 读取聚合参数：人脸识别 / 姿势检测由勾选框决定是否参与。
+/** 读取聚合参数：只有两个开关。
  *
- * 目标检测与绑定规则都不在这里配——后端固定（图片推理那套人头检测 + 链式贪心一一对应）。
+ * 目标检测、人脸识别阈值、姿势配置与绑定规则全部锁在后端，前端不提交。
  */
 function readAggregateOptions() {
-  return {
-    face: !!el('aggFaceRecognition').checked, pose: !!el('aggPose').checked,
-    threshold: readFloored('aggRecThreshold', MATCH_THRESHOLD_FLOOR, 1, '识别阈值', '0.4'),
-    face_confidence: readFloored('aggFaceConfidence', FACE_CONFIDENCE_FLOOR, 0.99, '人脸置信度', '0.5'),
-  };
+  return { face: !!el('aggFaceRecognition').checked, pose: !!el('aggPose').checked };
 }
 
 /* ==================== 子标签页（待推理图片 / 聚合结果，布局与图片推理一致）==================== */

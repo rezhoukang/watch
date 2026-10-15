@@ -414,10 +414,10 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   nodes.get('aggPose').checked = true;
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
-  assert.deepEqual(aggregatePayload, {
-    face: true, pose: true, threshold: 0.4, face_confidence: 0.5,
-  });
+  assert.deepEqual(aggregatePayload, { face: true, pose: true }, '聚合只提交两个开关');
   assert.equal(nodes.has('aggPoseConfidence'), false, '聚合姿势配置固定，不能出现置信度输入框');
+  assert.equal(nodes.has('aggFaceConfidence'), false, '人脸置信度锁死，界面不留输入框');
+  assert.equal(nodes.has('aggRecThreshold'), false, '识别阈值锁死，界面不留输入框');
   assert(nodes.get('aggStatus').textContent.includes('贴姓名 1 个'));
   const aggBox = nodes.get('aggResult');
   assert(aggBox.innerHTML.includes('data-role="viewer"') && aggBox.innerHTML.includes('class="boxes"'), '结果要和图片推理一样叠框渲染');
@@ -445,43 +445,20 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   aggBox.querySelector('[data-role="baseimg"]').events.load();
   assert.equal(aggViewer.classList.contains('always-tags'), true, '重绘保留常显标签');
   assert.equal(calls.length, beforeTagToggle, '切换标签显示不能触发推理请求');
-  // 勾掉两步后只跑目标检测，参数随勾选变化
+  // 勾掉两步后只跑目标检测，参数只剩两个开关
   nodes.get('aggFaceRecognition').checked = false;
   nodes.get('aggPose').checked = false;
-  nodes.get('aggRecThreshold').value = '0.35';
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
-  assert.equal(aggregatePayload.face, false);
-  assert.equal(aggregatePayload.pose, false);
-  assert.equal(aggregatePayload.threshold, 0.35);
-  assert.equal('pose_confidence' in aggregatePayload, false, '前端不提交可覆盖固定姿势配置的参数');
+  assert.deepEqual(aggregatePayload, { face: false, pose: false });
   assert.equal(aggBox.querySelector('[data-role="alwaystag"]').checked, true, '切换图片后保留常显标签选择');
   assert.equal(aggViewer.classList.contains('always-tags'), true);
   tagToggle.checked = false;
   tagToggle.events.change({ target: tagToggle });
   assert.equal(aggViewer.classList.contains('always-tags'), false);
-  // 人脸置信度 ≥ 0.5、识别阈值 ≥ 0.3：低于下限抬到下限，并回写到输入框
-  nodes.get('aggRecThreshold').value = '0.1';
-  nodes.get('aggFaceConfidence').value = '0.2';
-  await nodes.get('aggImageGrid').children[0].events.click();
-  await flush();
-  assert.equal(aggregatePayload.threshold, 0.3);
-  assert.equal(aggregatePayload.face_confidence, 0.5);
-  assert.equal(nodes.get('aggRecThreshold').value, '0.3', '生效值要回写到输入框');
-  assert.equal(nodes.get('aggFaceConfidence').value, '0.5');
-  nodes.get('aggRecThreshold').value = '0.35';
-  nodes.get('aggFaceConfidence').value = '0.6';
-  await nodes.get('aggImageGrid').children[0].events.click();
-  await flush();
-  assert.equal(aggregatePayload.threshold, 0.35, '下限之上照传' );
-  assert.equal(aggregatePayload.face_confidence, 0.6);
   // 点图后要自动切到「聚合结果」子页，并把状态切回图片页的刷新按钮藏起来
   assert.equal(aggregateSubtabs[0].dataset.agg, 'images');
   assert.equal(nodes.get('aggRefresh').hidden, true);
-  nodes.get('aggRecThreshold').value = '2';
-  await nodes.get('aggImageGrid').children[0].events.click();
-  await flush();
-  assert(aggBox.innerHTML.includes('识别阈值必须在 0.3 到 1 之间'), '参数越界要报错而不是静默失败');
   assert.equal(nodes.has('globalBanner'), false);
   console.log('ES module startup, navigation and result viewer checks passed (16 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

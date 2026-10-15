@@ -1,5 +1,5 @@
-import { el, esc, api, showError } from './core.js?v=87';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=87';
+import { el, esc, api, showError } from './core.js?v=88';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=88';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;

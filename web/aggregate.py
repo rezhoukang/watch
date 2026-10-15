@@ -12,21 +12,14 @@ router = APIRouter()
 
 
 class AggregateRequest(BaseModel):
-    """聚合参数：目标检测与绑定规则都不在这里配。
+    """聚合参数：只有两个开关。
 
-    目标检测固定复用「图片推理 → 目标检测」；绑定固定为链式贪心 + 一一对应（IoU > 0）。
-    人脸识别 / 姿势检测用勾选框控制是否参与。
-    人脸置信度与识别阈值有下限（≥ 0.5 / ≥ 0.3）：这里不设 ge 硬报错，
-    由 aggregate.aggregate_image 抬到下限并把生效值回报在 steps.face 里。
+    目标检测、人脸识别阈值、姿势配置、绑定规则全部锁死在 aggregate.py 里（
+    FACE_CONFIDENCE / MATCH_THRESHOLD / MIN_QUALITY_CONFIDENCE / MIN_FACE_PIXELS /
+    MIN_FACE_SHARPNESS、POSE_* 、MIN_BIND_IOU），前端不开放也不提交。
     """
     face: bool = True
     pose: bool = True
-    # 人脸识别（下限见 aggregate.MIN_FACE_CONFIDENCE / MIN_MATCH_THRESHOLD）
-    threshold: float = Field(default=face_recognition.DEFAULT_MATCH_THRESHOLD, ge=0, le=1)
-    face_confidence: float = Field(default=face_recognition.DEFAULT_QUALITY_CONFIDENCE, ge=0, le=1)
-    min_confidence: float = Field(default=face_recognition.DEFAULT_QUALITY_CONFIDENCE, ge=0, le=1)
-    min_size: int = Field(default=face_recognition.DEFAULT_MIN_FACE_PIXELS, ge=1, le=1000)
-    min_sharpness: float = Field(default=face_recognition.DEFAULT_MIN_SHARPNESS, ge=0, le=10000)
 
 
 @router.post('/api/aggregate/image/{filename}', summary='聚合操作：目标检测 + 人脸识别 + 姿势检测')
@@ -37,11 +30,7 @@ def aggregate_image(filename: str, payload: AggregateRequest) -> dict:
         raise HTTPException(status_code=400, detail='只能聚合待推理列表中的图片')
     common.logger.info('开始聚合：%s（人脸=%s, 姿势=%s）', filename, payload.face, payload.pose)
     try:
-        result = aggregate.aggregate_image(
-            src, face=payload.face, pose=payload.pose,
-            threshold=payload.threshold, face_confidence=payload.face_confidence,
-            min_confidence=payload.min_confidence, min_size=payload.min_size,
-            min_sharpness=payload.min_sharpness)
+        result = aggregate.aggregate_image(src, face=payload.face, pose=payload.pose)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

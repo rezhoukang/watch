@@ -1,5 +1,5 @@
-import { el } from './core.js?v=87';
-import { hideHoverPreview } from './preview.js?v=87';
+import { el } from './core.js?v=88';
+import { hideHoverPreview } from './preview.js?v=88';
 
 let loadHistory = () => {};
 

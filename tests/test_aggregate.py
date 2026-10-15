@@ -266,7 +266,7 @@ class AggregateApiTests(unittest.TestCase):
         self.assertIn(record['targets'][0]['poses'][0]['behavior']['state'], ('低头', '抬头', '无法判断'))
         # 三步都要有各自的统计与耗时，便于界面解释
         self.assertEqual(record['steps']['detect']['count'], 3)
-        self.assertEqual(record['steps']['face']['threshold'], .4)
+        self.assertEqual(record['steps']['face']['threshold'], aggregate.MATCH_THRESHOLD)
         self.assertEqual(record['steps']['face']['library_count'], 1)
         self.assertEqual(record['steps']['pose']['weight'], 'yolov8m-pose.pt')
         for step in ('detect', 'face', 'pose'):
@@ -379,18 +379,23 @@ class AggregateApiTests(unittest.TestCase):
         # 人头框与人体框的 IoU 很小（≈0.2），但只要 > 0 就该绑上
         self.assertLess(record['steps']['pose']['bound'] and record['targets'][0]['poses'][0]['bind']['iou'], .3)
 
-    def test_face_confidence_and_threshold_are_floored(self):
-        """人脸置信度锁在 ≥ 0.5、识别阈值锁在 ≥ 0.3：低于下限抬到下限并回报生效值。"""
-        record = self.post(threshold=.1, face_confidence=.2).json()
-        self.assertEqual(record['steps']['face']['threshold'], aggregate.MIN_MATCH_THRESHOLD)
-        self.assertEqual(record['steps']['face']['detect_confidence'], aggregate.MIN_FACE_CONFIDENCE)
+    def test_face_parameters_are_locked(self):
+        """人脸识别参数全部锁死：界面只有一个勾选框，阈值由后端常量决定。"""
+        record = self.post().json()
+        self.assertEqual(record['steps']['face']['threshold'], aggregate.MATCH_THRESHOLD)
+        self.assertEqual(record['steps']['face']['detect_confidence'], aggregate.FACE_CONFIDENCE)
         called = self.recognition.call_args.kwargs
-        self.assertEqual(called['threshold'], aggregate.MIN_MATCH_THRESHOLD)
-        self.assertEqual(called['detect_confidence'], aggregate.MIN_FACE_CONFIDENCE)
-        # 下限之上原样透传，不会被抬高
-        above = self.post(threshold=.45, face_confidence=.7).json()
-        self.assertEqual(above['steps']['face']['threshold'], .45)
-        self.assertEqual(above['steps']['face']['detect_confidence'], .7)
+        self.assertEqual(called['threshold'], aggregate.MATCH_THRESHOLD)
+        self.assertEqual(called['detect_confidence'], aggregate.FACE_CONFIDENCE)
+        self.assertEqual(called['min_confidence'], aggregate.MIN_QUALITY_CONFIDENCE)
+        self.assertEqual(called['min_size'], aggregate.MIN_FACE_PIXELS)
+        self.assertEqual(called['min_sharpness'], aggregate.MIN_FACE_SHARPNESS)
+        # 锁定的值就是之前那个下限：人脸置信度 ≥ 0.5、识别阈值 ≥ 0.3
+        self.assertEqual((aggregate.FACE_CONFIDENCE, aggregate.MATCH_THRESHOLD), (.5, .3))
+        # 前端即使多传阈值也被忽略，不会改变生效值
+        ignored = self.post(threshold=.9, face_confidence=.9).json()
+        self.assertEqual(ignored['steps']['face']['threshold'], aggregate.MATCH_THRESHOLD)
+        self.assertEqual(ignored['steps']['face']['detect_confidence'], aggregate.FACE_CONFIDENCE)
 
     def test_empty_library_is_reported(self):
         # 直接赋值会泄漏给同类里的后续用例（后面几个都要求人脸识别可用），必须登记还原
@@ -406,10 +411,11 @@ class AggregateApiTests(unittest.TestCase):
         self.assertIn('链式贪心', record['bind']['rule'])
         self.assertEqual(record['steps']['pose']['min_iou'], 0)
 
-    def test_out_of_range_parameters_are_rejected(self):
-        for bad in ({'threshold': 2}, {'face_confidence': 3}):
-            response = self.post(**bad)
-            self.assertEqual(response.status_code, 422, f'{bad} 应被拒绝：{response.text}')
+    def test_out_of_range_or_unknown_fields_do_not_break_the_run(self):
+        # 阈值参数已锁死：多传/乱传一律忽略，不会 422，也不会改变生效值
+        extra = self.post(threshold=2, face_confidence=3)
+        self.assertEqual(extra.status_code, 200, extra.text)
+        self.assertEqual(extra.json()['steps']['face']['threshold'], aggregate.MATCH_THRESHOLD)
 
     def test_missing_and_illegal_filenames_are_rejected(self):
         self.assertEqual(self.client.post('/api/aggregate/image/none.png', json={}).status_code, 404)

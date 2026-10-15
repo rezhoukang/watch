@@ -47,9 +47,14 @@ BIND_RULE = ("链式贪心 + 一一对应：只保留 IoU > 0 的配对，按 Io
 FACE_BIND_RULE = ("链式贪心 + 一一对应：只保留 IoU > 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），"
                   "一个人头最多贴一个姓名、一张脸最多贴一个人头")
 
-# 人脸识别的两个下限（锁在，界面可调但不允许低于下限）
-MIN_FACE_CONFIDENCE = 0.5
-MIN_MATCH_THRESHOLD = 0.3
+# 人脸识别参数全部锁死（界面上只有一个「人脸识别」勾选框，不开放任何阈值输入）：
+# 人脸置信度 0.5（SCRFD 检出下限）、识别阈值 0.3（余弦相似度下限）、
+# 质量门槛沿用 face_recognition 查询端默认值（0.5 / 24px / 50）。
+FACE_CONFIDENCE = 0.5
+MATCH_THRESHOLD = 0.3
+MIN_QUALITY_CONFIDENCE = face_recognition.DEFAULT_QUALITY_CONFIDENCE
+MIN_FACE_PIXELS = face_recognition.DEFAULT_MIN_FACE_PIXELS
+MIN_FACE_SHARPNESS = face_recognition.DEFAULT_MIN_SHARPNESS
 
 # Windows 常见中文字体（找不到就退化为只写编号，避免姓名画成方块）
 FONT_CANDIDATES = (
@@ -238,29 +243,14 @@ def render(image: np.ndarray, targets: list[dict]) -> Image.Image:
 
 # ---------------------------------------------------------------- 主流程
 
-def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
-                    threshold: float = face_recognition.DEFAULT_MATCH_THRESHOLD,
-                    face_confidence: float = face_recognition.DEFAULT_QUALITY_CONFIDENCE,
-                    min_confidence: float = face_recognition.DEFAULT_QUALITY_CONFIDENCE,
-                    min_size: int = face_recognition.DEFAULT_MIN_FACE_PIXELS,
-                    min_sharpness: float = face_recognition.DEFAULT_MIN_SHARPNESS,
-                    save: bool = True) -> dict:
+def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True) -> dict:
     """一次跑完 目标检测 → 人脸识别 → 姿势检测绑定，返回结构化结果 + 带标注的结果图。
 
-    目标检测没有参数——它就是「图片推理 → 目标检测」那一套；人脸识别与姿势检测由
-    face / pose 两个开关决定要不要跑；绑定规则固定（链式贪心 + 一一对应 + IoU > 0）。
-    人脸置信度与识别阈值有下限（≥ 0.5 / ≥ 0.3），低于下限会被抬到下限，生效值回报在
-    steps.face.detect_confidence / steps.face.threshold 里。
+    三步的配置全部锁死，只留「人脸识别」「姿势检测」两个开关：
+    目标检测就是「图片推理 → 目标检测」那一套；人脸识别固定用 FACE_CONFIDENCE /
+    MATCH_THRESHOLD（生效值回报在 steps.face 里）；绑定规则固定（链式贪心 + 一一对应）。
     """
     started = time.perf_counter()
-    if not math.isfinite(threshold) or not 0 <= threshold <= 1:
-        raise ValueError("识别阈值必须在 0 到 1 之间")
-    if not math.isfinite(face_confidence) or not 0 <= face_confidence <= 1:
-        raise ValueError("人脸置信度必须在 0 到 1 之间")
-    # 下限（锁在）：远景小脸给太低会放进模糊/侧脸，给太高又全被卡掉；少了这个闸门
-    # 一个手滑的 0.1 就会把噪声脸也拿去比对。
-    threshold = max(MIN_MATCH_THRESHOLD, float(threshold))
-    face_confidence = max(MIN_FACE_CONFIDENCE, float(face_confidence))
 
     image = read_image(src)
     height, width = image.shape[:2]
@@ -284,8 +274,9 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
             raise ValueError("人脸库为空：请先在「人脸检测」页导入学生花名册或添加人脸")
         mark = time.perf_counter()
         recognized = face_recognition.recognize_faces(
-            image, threshold=threshold, detect_confidence=face_confidence,
-            min_confidence=min_confidence, min_size=min_size, min_sharpness=min_sharpness)
+            image, threshold=MATCH_THRESHOLD, detect_confidence=FACE_CONFIDENCE,
+            min_confidence=MIN_QUALITY_CONFIDENCE, min_size=MIN_FACE_PIXELS,
+            min_sharpness=MIN_FACE_SHARPNESS)
         faces = recognized["faces"]
         bindings = bind_faces(faces, targets)
         named = 0
@@ -301,8 +292,9 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
                            "similarity": record["match"]["similarity"],
                            "photo_url": record["match"].get("photo_url"), "face_id": record["face_id"]})
             named += 1
-        steps["face"] = {"enabled": True, "threshold": threshold, "detect_confidence": face_confidence,
-                         "min_size": min_size, "min_sharpness": min_sharpness,
+        steps["face"] = {"enabled": True, "threshold": MATCH_THRESHOLD,
+                         "detect_confidence": FACE_CONFIDENCE,
+                         "min_size": MIN_FACE_PIXELS, "min_sharpness": MIN_FACE_SHARPNESS,
                          "library_count": len(face_recognition.list_entries()),
                          "detected": recognized["detected"], "face_count": recognized["face_count"],
                          "matched": recognized["matched"], "unknown": recognized["unknown"],

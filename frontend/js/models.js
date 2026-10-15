@@ -1,4 +1,4 @@
-import { el, api } from './core.js?v=87';
+import { el, api } from './core.js?v=88';
 
 /* ==================== 环境状态 ==================== */
 
