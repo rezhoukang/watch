@@ -1,7 +1,7 @@
-import { el, esc, api, banner } from './core.js?v=76';
-import { showHeadChart } from './charts.js?v=76';
-import { switchSubPane } from './navigation.js?v=76';
-import { loadImages, detectImage } from './images.js?v=76';
+import { el, esc, api, banner } from './core.js?v=77';
+import { showHeadChart } from './charts.js?v=77';
+import { switchSubPane } from './navigation.js?v=77';
+import { loadImages, detectImage } from './images.js?v=77';
 
 async function loadOutputs() {
   const box = el('outputList');

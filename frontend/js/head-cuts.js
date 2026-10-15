@@ -1,4 +1,4 @@
-import { el, esc, api, showError } from './core.js?v=76';
+import { el, esc, api, showError } from './core.js?v=77';
 
 const selected = new Set();
 let filenames = [], current = null, activeJob = null, page = 0, loadVersion = 0;
@@ -98,8 +98,6 @@ function renderHeads() {
   if (!current) return;
   const record = current;
   el('cutProgress').textContent = `${record.progress}/${record.total} · ${record.message}`;
-  el('cutDownload').hidden = batchBusy(record);
-  el('cutDownload').href = `/api/head-cuts/${record.run_id}/download`;
   const faceJob = record.face_detection;
   el('cutDetectFaces').disabled = running(record.status) || running(faceJob?.status) || !record.crop_count;
   el('cutFaceConfidence').disabled = running(faceJob?.status);

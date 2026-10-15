@@ -1,6 +1,6 @@
-import { el, esc, api, showError } from './core.js?v=76';
-import { DEFAULT_WEIGHTS, loadEnv } from './models.js?v=76';
-import { pollJob } from './jobs.js?v=76';
+import { el, esc, api, showError } from './core.js?v=77';
+import { DEFAULT_WEIGHTS, loadEnv } from './models.js?v=77';
+import { pollJob } from './jobs.js?v=77';
 
 /* ==================== 训练 ==================== */
 
