@@ -415,8 +415,9 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
   assert.deepEqual(aggregatePayload, {
-    face: true, pose: true, threshold: 0.4, face_confidence: 0.5, pose_confidence: 0.6,
+    face: true, pose: true, threshold: 0.4, face_confidence: 0.5,
   });
+  assert.equal(nodes.has('aggPoseConfidence'), false, '聚合姿势配置固定，不能出现置信度输入框');
   assert(nodes.get('aggStatus').textContent.includes('贴姓名 1 个'));
   const aggBox = nodes.get('aggResult');
   assert(aggBox.innerHTML.includes('data-role="viewer"') && aggBox.innerHTML.includes('class="boxes"'), '结果要和图片推理一样叠框渲染');
@@ -448,13 +449,12 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   nodes.get('aggFaceRecognition').checked = false;
   nodes.get('aggPose').checked = false;
   nodes.get('aggRecThreshold').value = '0.35';
-  nodes.get('aggPoseConfidence').value = '';
   await nodes.get('aggImageGrid').children[0].events.click();
   await flush();
   assert.equal(aggregatePayload.face, false);
   assert.equal(aggregatePayload.pose, false);
   assert.equal(aggregatePayload.threshold, 0.35);
-  assert.equal(aggregatePayload.pose_confidence, 0.6, '清空输入框要回落到默认置信度');
+  assert.equal('pose_confidence' in aggregatePayload, false, '前端不提交可覆盖固定姿势配置的参数');
   assert.equal(aggBox.querySelector('[data-role="alwaystag"]').checked, true, '切换图片后保留常显标签选择');
   assert.equal(aggViewer.classList.contains('always-tags'), true);
   tagToggle.checked = false;

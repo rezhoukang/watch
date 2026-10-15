@@ -321,9 +321,9 @@
       <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别</label>
       <label>人脸置信度 ≥ <input type="number" id="aggFaceConfidence" value="0.5" min="0.01" max="0.99" step="0.05"></label>
       <label>识别阈值 ≥ <input type="number" id="aggRecThreshold" value="0.4" min="0" max="1" step="0.01"></label>
-      <label><input type="checkbox" id="aggPose" checked> 姿势检测</label>
-      <label>姿势置信度 ≥ <input type="number" id="aggPoseConfidence" value="0.6" min="0.01" max="0.99" step="0.05"></label>
+      <label><input type="checkbox" id="aggPose" checked> 姿势检测（固定配置）</label>
     </div>
+    <p class="hint">姿势检测固定：yolov8m-pose.pt · 置信度 0.6 · imgsz 640 · 低头 R &lt; 0.05 · 抬头 R &gt; 0.20 · 全图物体检测与关联（Pose 框）开启 · 物体置信度 ≥ 0.03。举手优先，无法判断的姿势直接排除。</p>
     <p class="hint">目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.55（已锁死，前端不开放）。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
 
     <nav class="subnav">
@@ -413,6 +413,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=85"></script>
+<script type="module" src="/app.js?v=86"></script>
 </body>
 </html>

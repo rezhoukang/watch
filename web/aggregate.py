@@ -25,8 +25,6 @@ class AggregateRequest(BaseModel):
     min_confidence: float = Field(default=face_recognition.DEFAULT_QUALITY_CONFIDENCE, ge=0, le=1)
     min_size: int = Field(default=face_recognition.DEFAULT_MIN_FACE_PIXELS, ge=1, le=1000)
     min_sharpness: float = Field(default=face_recognition.DEFAULT_MIN_SHARPNESS, ge=0, le=10000)
-    # 姿势检测（绑定规则固定，不可配）
-    pose_confidence: float = Field(default=aggregate.DEFAULT_POSE_CONFIDENCE, ge=0.01, le=0.99)
 
 
 @router.post('/api/aggregate/image/{filename}', summary='聚合操作：目标检测 + 人脸识别 + 姿势检测')
@@ -41,7 +39,7 @@ def aggregate_image(filename: str, payload: AggregateRequest) -> dict:
             src, face=payload.face, pose=payload.pose,
             threshold=payload.threshold, face_confidence=payload.face_confidence,
             min_confidence=payload.min_confidence, min_size=payload.min_size,
-            min_sharpness=payload.min_sharpness, pose_confidence=payload.pose_confidence)
+            min_sharpness=payload.min_sharpness)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

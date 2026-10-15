@@ -14,6 +14,7 @@ import aggregate
 import app
 import face_recognition
 import head_fusion
+import pose_roi
 import vision
 from web import common
 
@@ -64,6 +65,7 @@ class BindFacesTests(unittest.TestCase):
 
     def test_highest_overlap_wins(self):
         binding = self.bind([20, 20, 50, 60])
+        assert binding is not None
         self.assertEqual(binding['target_index'], 1)
         self.assertAlmostEqual(binding['iou'], aggregate.iou([20, 20, 50, 60], [10, 10, 60, 120]), places=4)
 
@@ -293,6 +295,65 @@ class AggregateApiTests(unittest.TestCase):
         self.assertEqual(self.pose_model.predict.call_args.kwargs['conf'], .6)
         self.assertEqual(len(record['poses'][0]['keypoints']), 17)
 
+    def test_pose_settings_are_locked_and_stale_overrides_are_ignored(self):
+        with patch.object(vision, 'detect_image', wraps=vision.detect_image) as detect:
+            response = self.post(face=False, pose_confidence=.01, pose_weights='other.pt',
+                                 imgsz=1280, head_down_r_threshold=.5,
+                                 head_up_r_threshold=.6, pose_roi=False, roi_confidence=.9)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(detect.call_args.kwargs, {
+            'weights': 'yolov8m-pose.pt', 'conf': .6, 'imgsz': 640, 'save_result': False,
+            'head_down_r_threshold': .05, 'head_up_r_threshold': .20,
+            'pose_roi': True, 'roi_confidence': .03,
+        })
+        self.assertEqual(self.pose_model.predict.call_args.kwargs['conf'], .6)
+        self.assertEqual(self.pose_model.predict.call_args.kwargs['imgsz'], 640)
+        step = response.json()['steps']['pose']
+        for key, value in {'weight': 'yolov8m-pose.pt', 'confidence': .6, 'imgsz': 640,
+                           'head_down_r_threshold': .05, 'head_up_r_threshold': .20,
+                           'pose_roi': True, 'roi_confidence': .03}.items():
+            self.assertEqual(step[key], value)
+        self.recognition.assert_not_called()
+
+    def test_unknown_poses_are_excluded_and_empty_results_are_valid(self):
+        result = pose_result()
+        assert result.keypoints is not None
+        # R=0.1 落在两个阈值中间；另一个人的鼻关键点缺失。
+        result.keypoints.data[0, 0, 1] = 35
+        result.keypoints.data[1, 0, 2] = 0
+        self.pose_model.predict.return_value = [result]
+        with patch.object(pose_roi, '_get_model') as objects:
+            response = self.post(face=False)
+        self.assertEqual(response.status_code, 200, response.text)
+        record = response.json()
+        self.assertEqual(record['poses'], [])
+        self.assertEqual(record['steps']['pose']['excluded_unknown'], 2)
+        self.assertEqual(record['steps']['pose']['bound'], 0)
+        self.assertEqual(record['count'], 3)
+        objects.assert_not_called()
+
+    def test_head_down_objects_use_full_image_association_at_point_zero_three(self):
+        result = pose_result()
+        assert result.keypoints is not None
+        result.keypoints.data[:, 0, 1] = 42  # R=-0.04，低头。
+        self.pose_model.predict.return_value = [result]
+        object_model = Mock()
+        object_model.predict.return_value = [Results(
+            result.orig_img, path='people.png', names={0: 'cell phone', 1: 'book'},
+            boxes=torch.tensor([[20, 50, 35, 65, .04, 0], [120, 50, 140, 70, .04, 1]],
+                               dtype=torch.float32))]
+        with patch.object(pose_roi, '_get_model', return_value=object_model):
+            response = self.post(face=False)
+        self.assertEqual(response.status_code, 200, response.text)
+        record = response.json()
+        self.assertEqual([p['behavior']['state'] for p in record['poses']], ['疑似看手机', '疑似阅读'])
+        self.assertEqual([p['target_index'] for p in record['poses']], [0, 1])
+        self.assertEqual(object_model.predict.call_count, 1)
+        self.assertEqual(object_model.predict.call_args.kwargs['conf'], .03)
+        self.assertEqual(object_model.predict.call_args.kwargs['imgsz'], 640)
+        self.assertEqual(object_model.predict.call_args.kwargs['source'].shape, (400, 640, 3))
+        self.assertEqual(record['targets'][0]['poses'][0]['behavior']['state'], '疑似看手机')
+
     def test_unbound_pose_is_listed_instead_of_silently_dropped(self):
         far = Results(np.full((400, 640, 3), 255, dtype=np.uint8), path='people.png', names={0: 'person'},
                       boxes=torch.tensor([[600, 380, 639, 399, .9, 0]], dtype=torch.float32),
@@ -333,7 +394,7 @@ class AggregateApiTests(unittest.TestCase):
         self.assertEqual(record['steps']['pose']['min_iou'], 0)
 
     def test_out_of_range_parameters_are_rejected(self):
-        for bad in ({'threshold': 2}, {'pose_confidence': 0}, {'face_confidence': 3}):
+        for bad in ({'threshold': 2}, {'face_confidence': 3}):
             response = self.post(**bad)
             self.assertEqual(response.status_code, 422, f'{bad} 应被拒绝：{response.text}')
 

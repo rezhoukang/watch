@@ -1,6 +1,6 @@
-import { el, esc, api, showError } from './core.js?v=85';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=85';
-import { classColor } from './viewer.js?v=85';
+import { el, esc, api, showError } from './core.js?v=86';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=86';
+import { classColor } from './viewer.js?v=86';
 
 /* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
@@ -26,11 +26,9 @@ function readAggregateOptions() {
   if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) throw new Error('识别阈值必须在 0 到 1 之间');
   const faceConfidence = Number(el('aggFaceConfidence').value || '0.5');
   if (!Number.isFinite(faceConfidence) || faceConfidence < 0.01 || faceConfidence > 0.99) throw new Error('人脸置信度必须在 0.01 到 0.99 之间');
-  const poseConfidence = Number(el('aggPoseConfidence').value || '0.6');
-  if (!Number.isFinite(poseConfidence) || poseConfidence < 0.01 || poseConfidence > 0.99) throw new Error('姿势置信度必须在 0.01 到 0.99 之间');
   return {
     face: !!el('aggFaceRecognition').checked, pose: !!el('aggPose').checked,
-    threshold, face_confidence: faceConfidence, pose_confidence: poseConfidence,
+    threshold, face_confidence: faceConfidence,
   };
 }
 

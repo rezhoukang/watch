@@ -24,8 +24,6 @@ from PIL import Image, ImageDraw, ImageFont
 
 import face_recognition
 import head_fusion
-import pose_behaviors
-import pose_support
 import vision
 from project_paths import OUTPUT_DIR
 
@@ -33,7 +31,11 @@ from project_paths import OUTPUT_DIR
 RESULT_DIR = OUTPUT_DIR / "aggregate"
 
 POSE_WEIGHTS = "yolov8m-pose.pt"
-DEFAULT_POSE_CONFIDENCE = vision.DEFAULT_POSE_CONFIDENCE
+DEFAULT_POSE_CONFIDENCE = 0.6
+POSE_IMGSZ = 640
+POSE_HEAD_DOWN_R = 0.05
+POSE_HEAD_UP_R = 0.20
+POSE_OBJECT_CONFIDENCE = 0.03
 
 # 目标检测：与「图片推理 → 目标检测」完全一致，以 medium.pt 为基准（False）
 RTDETR_BASE = False
@@ -164,26 +166,16 @@ def detect_targets(src: Path) -> dict:
             "fusion": fusion, "rule": rule}
 
 
-def detect_poses(src: Path, weights: str = POSE_WEIGHTS, conf: float = DEFAULT_POSE_CONFIDENCE,
-                 imgsz: int = 640) -> list[dict]:
-    """Pose 权重出人体框 + 骨架；行为按 pose_behaviors 默认阈值（低头 0.05 / 抬头 0.20）判定。"""
-    model = vision.get_model(weights)
-    predictions = model.predict(source=str(src), conf=conf, imgsz=vision._clamp_imgsz(imgsz),
-                                device=vision.device_arg(), verbose=False)
-    if len(predictions) != 1:
-        raise RuntimeError("姿势检测应返回一张图片的结果")
-    result = predictions[0]
-    keypoints = pose_support.serialize_keypoints(result)
-    if not keypoints:
-        raise ValueError(f"权重 {Path(weights).name} 没有返回骨架，请选择 Pose 权重")
-    height, width = result.orig_shape
-    poses = []
-    for index, (box, points) in enumerate(zip(result.boxes, keypoints), 1):
-        x1, y1, x2, y2 = (round(float(v), 2) for v in box.xyxy[0].tolist())
-        poses.append({"person_index": index, "bbox": [x1, y1, x2, y2],
-                      "confidence": round(float(box.conf[0]), 4), "keypoints": points,
-                      "behavior": pose_behaviors.classify(points, int(width), int(height))})
-    return poses
+def detect_poses(src: Path) -> dict:
+    """固定复用图片 Pose 流程：排除无法判断者，再执行全图物体检测与关联。"""
+    result = vision.detect_image(
+        src, weights=POSE_WEIGHTS, conf=DEFAULT_POSE_CONFIDENCE, imgsz=POSE_IMGSZ,
+        save_result=False, head_down_r_threshold=POSE_HEAD_DOWN_R,
+        head_up_r_threshold=POSE_HEAD_UP_R, pose_roi=True,
+        roi_confidence=POSE_OBJECT_CONFIDENCE)
+    if result["mode"] != "pose":
+        raise ValueError(f"权重 {POSE_WEIGHTS} 没有返回骨架")
+    return result
 
 
 # ---------------------------------------------------------------- 结果图
@@ -248,7 +240,6 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
                     min_confidence: float = face_recognition.DEFAULT_QUALITY_CONFIDENCE,
                     min_size: int = face_recognition.DEFAULT_MIN_FACE_PIXELS,
                     min_sharpness: float = face_recognition.DEFAULT_MIN_SHARPNESS,
-                    pose_weights: str = POSE_WEIGHTS, pose_confidence: float = DEFAULT_POSE_CONFIDENCE,
                     save: bool = True) -> dict:
     """一次跑完 目标检测 → 人脸识别 → 姿势检测绑定，返回结构化结果 + 带标注的结果图。
 
@@ -313,7 +304,11 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
         steps["pose"] = {"enabled": False, "reason": "未勾选姿势检测"}
     else:
         mark = time.perf_counter()
-        poses = detect_poses(src, pose_weights, pose_confidence)
+        pose_result = detect_poses(src)
+        poses = [{"person_index": index, "bbox": item["bbox"],
+                  "confidence": item["confidence"], "keypoints": item["keypoints"],
+                  "behavior": item["behavior"]}
+                 for index, item in enumerate(pose_result["detections"], 1)]
         pose_bindings = bind_poses(poses, targets)
         for index, record in enumerate(poses):
             binding = pose_bindings.get(index)
@@ -323,7 +318,11 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True,
                 targets[binding["target_index"]].setdefault("poses", []).append(
                     {"keypoints": record["keypoints"], "behavior": record["behavior"],
                      "confidence": record["confidence"], "bind": binding})
-        steps["pose"] = {"enabled": True, "weight": Path(pose_weights).name, "confidence": pose_confidence,
+        steps["pose"] = {"enabled": True, "weight": POSE_WEIGHTS, "confidence": DEFAULT_POSE_CONFIDENCE,
+                         "imgsz": POSE_IMGSZ, "head_down_r_threshold": POSE_HEAD_DOWN_R,
+                         "head_up_r_threshold": POSE_HEAD_UP_R, "pose_roi": True,
+                         "roi_confidence": POSE_OBJECT_CONFIDENCE,
+                         "excluded_unknown": pose_result["excluded_unknown"],
                          "count": len(poses), "bound": len(pose_bindings),
                          "unbound": len(poses)-len(pose_bindings), "rule": BIND_RULE,
                          "min_iou": MIN_BIND_IOU,
