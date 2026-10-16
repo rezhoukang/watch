@@ -1,6 +1,7 @@
-import { el, esc, api, showError } from './core.js?v=88';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=88';
-import { classColor } from './viewer.js?v=88';
+import { el, esc, api, showError } from './core.js?v=89';
+import { hideHoverPreview } from './preview.js?v=89';
+import { loadImageGallery } from './images.js?v=89';
+import { classColor } from './viewer.js?v=89';
 
 /* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
@@ -99,6 +100,25 @@ function paintHeads() {
     tag.className = 'tag';
     tag.textContent = headLabel(target);
     node.appendChild(tag);
+    // hover 已识别的 head 框 → 在框旁边浮出人脸库登记照（对应名字），便于人工核对
+    if (target.name && target.photo_url) {
+      let libImg = null;
+      node.addEventListener('mouseenter', () => {
+        if (libImg) return;
+        libImg = document.createElement('img');
+        libImg.className = 'agg-lib-photo';
+        libImg.src = target.photo_url;
+        libImg.alt = `${target.name} 登记照`;
+        libImg.title = `${target.name}（编号 ${target.entry_id || ''}）人像库登记照`;
+        node.appendChild(libImg);
+      });
+      node.addEventListener('mouseleave', () => {
+        if (!libImg) return;
+        if (libImg.remove) libImg.remove();
+        else if (libImg.parentNode) libImg.parentNode.removeChild(libImg);
+        libImg = null;
+      });
+    }
     layer.appendChild(node);
   });
   box.querySelectorAll('[data-role="headrow"]').forEach((row) => {
@@ -220,26 +240,7 @@ async function aggregateImage(filename) {
 }
 
 async function loadAggregate() {
-  const grid = el('aggImageGrid');
-  try {
-    const data = await api('/api/images');
-    hideHoverPreview();
-    if (!data.images.length) {
-      grid.innerHTML = '<div class="empty">暂无图片，请先上传</div>';
-      return;
-    }
-    grid.innerHTML = '';
-    for (const image of data.images) {
-      const figure = document.createElement('figure');
-      figure.title = `点击聚合：${image.filename}`;
-      figure.innerHTML = `<img src="${esc(image.url)}" alt=""><figcaption>${esc(image.filename)}</figcaption>`;
-      bindImageHover(figure, () => ({ src: image.url, name: image.filename }));
-      figure.addEventListener('click', () => { hideHoverPreview(); aggregateImage(image.filename); });
-      grid.appendChild(figure);
-    }
-  } catch (error) {
-    grid.innerHTML = `<div class="empty">加载失败：${esc(error instanceof Error ? error.message : String(error))}</div>`;
-  }
+  return loadImageGallery('aggregate', aggregateImage);
 }
 
 el('aggRefresh').addEventListener('click', loadAggregate);

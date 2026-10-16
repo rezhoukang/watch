@@ -23,7 +23,15 @@ class Element {
     };
   }
   addEventListener(name, callback) { this.events[name] = callback; }
-  appendChild(child) { this.children.push(child); }
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+  }
+  removeChild(child) {
+    const index = this.children.indexOf(child);
+    if (index >= 0) this.children.splice(index, 1);
+    if (child.parentNode === this) child.parentNode = null;
+  }
   replaceChildren() { this.children = []; }
   querySelector(selector) {
     if (!this.queries.has(selector)) this.queries.set(selector, new Element());
@@ -403,6 +411,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
       summary: { targets: 1, named_targets: 1, faces: 1, matched_faces: 1, unknown_faces: 0, rejected_faces: 0, poses: 1, bound_poses: 1 },
       unbound_faces: [], unbound_poses: [],
       targets: [{ class_name: 'head', confidence: 0.91, bbox: [10, 10, 90, 200], name: '张三', entry_id: '0001', similarity: 0.62,
+        photo_url: '/api/face-library/0001/photo',
         face_id: 'F01', poses: [{ behavior: { state: '低头' }, bind: { iou: 0.12, distance: 3.5 } }] }],
     };
   };
@@ -434,6 +443,16 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(headLayer.children[0].style.width, '40%');
   assert.equal(headLayer.children[0].children[0].textContent, '张三 0.62 · 低头');
   assert.equal(aggBox.querySelector('#aggResultCount').textContent.includes('图上 1 个 head 框'), true);
+  // hover 已识别的 head 框 → 旁边浮出人脸库登记照（对应名字）；移开即消失
+  const headBox = headLayer.children[0];
+  assert.equal(headBox.children.some((child) => child.className === 'agg-lib-photo'), false, '初始不显示登记照');
+  headBox.events.mouseenter();
+  const libPhoto = headBox.children.find((child) => child.className === 'agg-lib-photo');
+  assert(libPhoto, 'hover 后应出现登记照');
+  assert.equal(libPhoto.src, '/api/face-library/0001/photo');
+  assert.equal(libPhoto.alt, '张三 登记照');
+  headBox.events.mouseleave();
+  assert.equal(headBox.children.some((child) => child.className === 'agg-lib-photo'), false, '移开后登记照应移除');
   const aggViewer = aggBox.querySelector('[data-role="viewer"]');
   const tagToggle = aggBox.querySelector('[data-role="alwaystag"]');
   assert.equal(tagToggle.checked, false);

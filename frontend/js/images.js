@@ -1,14 +1,15 @@
-import { el, esc, api, banner, showError } from './core.js?v=88';
-import { readDetectOptions } from './models.js?v=88';
-import { bindImageHover, hideHoverPreview } from './preview.js?v=88';
-import { switchSubPane } from './navigation.js?v=88';
-import { renderDetectResult } from './viewer.js?v=88';
-import { importBehaviorRecords } from './annotator.js?v=88';
+import { el, esc, api, banner, showError } from './core.js?v=89';
+import { readDetectOptions } from './models.js?v=89';
+import { bindImageHover, hideHoverPreview } from './preview.js?v=89';
+import { switchSubPane } from './navigation.js?v=89';
+import { renderDetectResult } from './viewer.js?v=89';
+import { importBehaviorRecords } from './annotator.js?v=89';
 
 /* ==================== 图片推理 ==================== */
 
 const GALLERY_STATE = {
   images: { grid: 'imageGrid', prefix: 'image', selected: new Set(), items: [], busy: false },
+  aggregate: { grid: 'aggImageGrid', prefix: 'aggImage', selected: new Set(), items: [], busy: false },
   history: { grid: 'inferenceHistoryGrid', prefix: 'history', selected: new Set(), items: [], busy: false },
 };
 let ACTIVE_INFERENCE_ID = null;
@@ -55,7 +56,7 @@ function addGalleryControls(figure, kind, item, name) {
   const del = document.createElement('button');
   del.type = 'button'; del.className = 'del-btn'; del.textContent = '×'; del.title = `删除${name}`;
   del.setAttribute('aria-label', del.title);
-  del.addEventListener('click', (ev) => { ev.stopPropagation(); deleteGalleryItems(kind, [item]); });
+  del.addEventListener('click', (ev) => { ev.stopPropagation(); return deleteGalleryItems(kind, [item]); });
   figure.appendChild(del);
 }
 
@@ -63,16 +64,17 @@ async function deleteGalleryItems(kind, items) {
   const state = GALLERY_STATE[kind];
   if (state.busy || (kind === 'history' && MERGE_BUSY) || !items.length) return;
   hideHoverPreview();
-  const message = kind === 'images'
+  const pending = kind !== 'history';
+  const message = pending
     ? `删除选中的 ${items.length} 张待推理图片？已保存的历史推理记录仍保留。`
     : `删除选中的 ${items.length} 条推理记录及其保存的图片？已另存的合并结果仍保留。`;
   if (!confirm(message)) return;
   state.busy = true; syncGallerySelection(kind);
   if (kind === 'history') syncMergeChoices();
   try {
-    const response = await api(`/api/${kind === 'images' ? 'images' : 'inferences'}/delete`, {
+    const response = await api(`/api/${pending ? 'images' : 'inferences'}/delete`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(kind === 'images' ? { filenames: items } : { record_ids: items }),
+      body: JSON.stringify(pending ? { filenames: items } : { record_ids: items }),
     });
     const removed = new Set([...response.deleted, ...response.missing]);
     removed.forEach((item) => state.selected.delete(item));
@@ -80,7 +82,7 @@ async function deleteGalleryItems(kind, items) {
       ACTIVE_INFERENCE_ID = null; el('detResultName').textContent = '';
       el('detectResult').textContent = '此推理记录已删除，请从图库选择其他图片或记录。';
     }
-    await (kind === 'images' ? loadImages() : loadInferenceHistory());
+    await (pending ? state.reload() : loadInferenceHistory());
     if (response.failed.length) banner(`${response.failed.length} 项删除失败：${response.failed.map((f) => f.detail).join('；')}`);
   } catch (error) { banner('删除失败：' + error.message); }
   finally {
@@ -90,30 +92,38 @@ async function deleteGalleryItems(kind, items) {
 }
 
 async function loadImages() {
-  const box = el('imageGrid');
+  return loadImageGallery('images', detectImage);
+}
+
+async function loadImageGallery(kind, onImageClick) {
+  const state = GALLERY_STATE[kind];
+  state.reload = () => loadImageGallery(kind, onImageClick);
+  const box = el(state.grid);
   try {
     const data = await api('/api/images');
-    setGalleryItems('images', data.images.map((img) => img.filename));
+    hideHoverPreview();
+    setGalleryItems(kind, data.images.map((img) => img.filename));
     if (!data.images.length) {
       box.innerHTML = '<div class="empty">暂无图片，请先上传</div>';
-      syncGallerySelection('images');
+      syncGallerySelection(kind);
       return;
     }
     box.innerHTML = '';
     data.images.forEach((img) => {
       const fig = document.createElement('figure');
-      fig.title = '点击推理：' + img.filename;
+      fig.title = (kind === 'aggregate' ? '点击聚合：' : '点击推理：') + img.filename;
       fig.innerHTML = `<img src="${esc(img.url)}" alt=""><figcaption>${esc(img.filename)}</figcaption>`;
 
-      addGalleryControls(fig, 'images', img.filename, img.filename);
+      addGalleryControls(fig, kind, img.filename, img.filename);
       bindImageHover(fig, () => ({ src: img.url, name: img.filename }));
       fig.addEventListener('click', () => {
+        if (state.busy) return;
         hideHoverPreview();
-        detectImage(img.filename);
+        return onImageClick(img.filename);
       });
       box.appendChild(fig);
     });
-    syncGallerySelection('images');
+    syncGallerySelection(kind);
   } catch (e) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e instanceof Error ? e.message : String(e))}</div>`;
   }
@@ -418,4 +428,4 @@ function renderImageResult(record, filename, confidence, elapsed, imgsz) {
   });
 }
 
-export { loadImages, detectImage, loadInferenceHistory };
+export { loadImages, loadImageGallery, detectImage, loadInferenceHistory };

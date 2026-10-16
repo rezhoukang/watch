@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=54">
+<link rel="stylesheet" href="/style.css?v=58">
 </head>
 <body>
 <div class="app">
@@ -335,6 +335,12 @@
     </nav>
 
     <div class="subpanel active" id="aggregate-pane-images">
+      <div class="gallery-bar">
+        <label><input type="checkbox" id="aggImageSelectAll"> 全选</label>
+        <button class="btn small ghost" id="aggImageClearSelection">取消选择</button>
+        <button class="btn small danger" id="aggImageDeleteSelected" disabled>删除选中图片</button>
+        <span id="aggImageSelectionCount" role="status">已选 0 张</span>
+      </div>
       <div class="grid" id="aggImageGrid"></div>
     </div>
 
@@ -412,6 +418,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=88"></script>
+<script type="module" src="/app.js?v=89"></script>
 </body>
 </html>
