@@ -19,9 +19,12 @@ class Element {
   addEventListener(name, handler) { this.events[name] = handler; }
   setAttribute() {}
   removeAttribute(name) { delete this[name]; }
+  set innerHTML(value) { this.html = value; this.children = []; }
+  get innerHTML() { return this.html || ''; }
   querySelector(selector) {
     const all = this.children.flatMap((child) => [child, ...child.descendants()]);
-    return selector === '[data-gallery-select]' ? all.find((child) => Object.hasOwn(child.dataset, 'gallerySelect')) : null;
+    return selector === '[data-gallery-select]' ? all.find((child) => Object.hasOwn(child.dataset, 'gallerySelect'))
+      : selector === '.del-btn' ? all.find((child) => child.className === 'del-btn') : null;
   }
   descendants() { return this.children.flatMap((child) => [child, ...child.descendants()]); }
   fire(name) { return this.events[name]({ target: this, stopPropagation() {} }); }
@@ -51,7 +54,7 @@ const context = vm.createContext({
   showHoverPreview: (src, name) => { hovered = { src, name }; }, placeHoverPreview() {}, hoverEv: null,
   banner: (message) => { bannerText = message; },
   document: { createElement: (tag) => new Element(tag),
-    querySelectorAll: (selector) => selector.includes('#imageGrid') ? el('imageGrid').children : el('inferenceHistoryGrid').children },
+    querySelectorAll: (selector) => el(selector.match(/^#(\w+)/)[1]).children },
   switchSubPane: (pane) => assert.equal(pane, 'result'),
   renderDetectResult: (...args) => { rendered = args; },
   showError: (_, error) => { throw error; },
@@ -168,6 +171,50 @@ vm.runInContext(source.slice(start).replace(/^export .*$/gm, ''), context);
   assert.equal(images.length, 0);
   assert.equal(el('imageSelectAll').disabled, true);
   assert.equal(bannerText, '');
+  // 聚合图库复用图片推理的选择与删除逻辑；删除按钮不触发推理。
+  images = [{ filename: '课堂A.png', url: '/a.png' }, { filename: '课堂B.png', url: '/b.png' }];
+  let aggregateClicks = 0;
+  context.onAggregateClick = () => { aggregateClicks++; };
+  await vm.runInContext("loadImageGallery('aggregate', onAggregateClick)", context);
+  const aggregateCard = el('aggImageGrid').children[0];
+  const aggregateCheck = aggregateCard.querySelector('[data-gallery-select]');
+  aggregateCheck.checked = true; aggregateCheck.fire('change');
+  assert.equal(el('aggImageSelectAll').indeterminate, true);
+  assert.equal(el('aggImageDeleteSelected').disabled, false);
+  el('aggImageClearSelection').fire('click');
+  assert.equal(el('aggImageDeleteSelected').disabled, true);
+  allowConfirm = false;
+  const beforeCancel = requests.length;
+  await aggregateCard.querySelector('.del-btn').fire('click');
+  assert.equal(requests.length, beforeCancel);
+  allowConfirm = true;
+  let stopped = false;
+  await aggregateCard.querySelector('.del-btn').events.click({ stopPropagation() { stopped = true; } });
+  assert.equal(stopped, true);
+  assert.equal(aggregateClicks, 0);
+  assert.deepEqual(images.map(image => image.filename), ['课堂B.png']);
+  assert.equal(el('aggImageGrid').children.length, 1);
+  assert.deepEqual(JSON.parse(requests.findLast(request => request.url === '/api/images/delete').options.body),
+    { filenames: ['课堂A.png'] });
+  // 删除请求失败时保留选择，并恢复按钮供重试。
+  el('aggImageSelectAll').checked = true; el('aggImageSelectAll').fire('change');
+  const originalApi = context.api;
+  context.api = async (url, options) => {
+    if (url === '/api/images/delete') throw new Error('网络错误');
+    return originalApi(url, options);
+  };
+  await el('aggImageDeleteSelected').fire('click');
+  assert.equal(bannerText, '删除失败：网络错误');
+  assert.equal(el('aggImageDeleteSelected').disabled, false);
+  assert.equal(el('aggImageSelectionCount').textContent, '已选 1 张');
+  context.api = originalApi;
+  await el('aggImageDeleteSelected').fire('click');
+  assert.equal(images.length, 0);
+  assert.equal(el('aggImageSelectAll').disabled, true);
+  assert.equal(el('aggImageDeleteSelected').disabled, true);
+  assert.equal(el('aggImageSelectionCount').textContent, '已选 0 张');
+  await vm.runInContext('loadImages()', context);
+  assert.equal(el('imageGrid').children.length, 0, '切回图片推理时同步共用图库的删除');
   el('detHeadDetection').checked = true;
   detectionResponse = { mode: 'yolo', detections: [] };
   await assert.rejects(vm.runInContext("detectImage('test.png')", context), /目标检测未生效/);

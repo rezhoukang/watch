@@ -1,7 +1,7 @@
-import { el, esc, api, showError } from './core.js?v=89';
-import { hideHoverPreview } from './preview.js?v=89';
-import { loadImageGallery } from './images.js?v=89';
-import { classColor } from './viewer.js?v=89';
+import { el, esc, api, showError } from './core.js?v=90';
+import { hideHoverPreview } from './preview.js?v=90';
+import { loadImageGallery } from './images.js?v=90';
+import { classColor } from './viewer.js?v=90';
 
 /* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
