@@ -1,11 +1,11 @@
-import { el } from './core.js?v=90';
-import { hideHoverPreview } from './preview.js?v=90';
+import { el } from './core.js?v=94';
+import { hideHoverPreview } from './preview.js?v=94';
 
 let loadHistory = () => {};
 
 /* ==================== 标签页切换 ==================== */
 
-function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate }) {
+function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate, loadActions }) {
   loadHistory = loadInferenceHistory;
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
@@ -25,6 +25,7 @@ function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadData
       if (name === 'train') loadDatasets();
       if (name === 'dataset') loadDatasets().then(loadAnnotateGrid);
       if (name === 'aggregate') loadAggregate();
+      if (name === 'actions') loadActions();
     });
   });
 

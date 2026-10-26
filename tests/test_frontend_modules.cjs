@@ -48,7 +48,7 @@ class Element {
 const root = path.resolve(__dirname, '../frontend');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => [match[1], new Element()]));
-const tabs = ['detect', 'headcut', 'video', 'train', 'dataset', 'aggregate'].map((name) => {
+const tabs = ['detect', 'headcut', 'video', 'train', 'dataset', 'aggregate', 'actions'].map((name) => {
   const tab = new Element(); tab.dataset.tab = name; return tab;
 });
 const subtabs = ['images', 'result', 'history'].map((name) => {
@@ -63,6 +63,8 @@ const responses = {
   '/api/images': { images: [] }, '/api/videos': { videos: [], outputs: [] },
   '/api/inferences': { records: [] }, '/api/datasets': { datasets: [] },
   '/api/head-cuts': { runs: [] },
+  '/api/actions/runs': { runs: [] },
+  '/api/actions/status?model=4b&quantization=4bit': { available: false, message: '模型尚未下载', active_job: null },
 };
 const context = vm.createContext({
   console, setTimeout, clearTimeout, AbortController, URLSearchParams,
@@ -102,7 +104,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     assert(match[1].endsWith(`?v=${styleVersion}`), `Stylesheet has stale asset version: ${match[1]}`);
   }
   await entry.evaluate(); await flush();
-  assert.equal(modules.size, 16);
+  assert.equal(modules.size, 17);
   assert(calls.includes('/api/yolo/status'));
   assert(calls.includes('/api/images'));
   assert(calls.includes('/api/videos'));
@@ -479,5 +481,5 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(aggregateSubtabs[0].dataset.agg, 'images');
   assert.equal(nodes.get('aggRefresh').hidden, true);
   assert.equal(nodes.has('globalBanner'), false);
-  console.log('ES module startup, navigation and result viewer checks passed (16 modules, real HTML IDs).');
+  console.log('ES module startup, navigation and result viewer checks passed (17 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
