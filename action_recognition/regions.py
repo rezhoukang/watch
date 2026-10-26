@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw
 
 @dataclass(frozen=True)
 class Expansion:
-    side: float = 1.0
+    side: float = 0.85
     top: float = 0.0
     below: float = 1.3
 

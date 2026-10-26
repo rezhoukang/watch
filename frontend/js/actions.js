@@ -1,5 +1,6 @@
-import { el, esc, api } from './core.js?v=94';
-import { bindImageHover } from './preview.js?v=94';
+import { el, esc, api } from './core.js?v=95';
+import { bindImageHover } from './preview.js?v=95';
+import { getPromptStates, initPromptEditor, loadActionPrompts } from './action-prompts.js?v=95';
 
 // Independent module: anonymous Head IDs, original-image crops, local VLM only.
 let images = [], record = null, activeCrop = '', activeJob = null, timer = null;
@@ -103,7 +104,7 @@ function applyRecord(data, keepSelection = true) {
   el('actErrors').hidden = !runErrors.length;
   el('actErrorList').innerHTML = runErrors.map(item => `<p>${esc(item.source)}：${esc(item.message)}</p>`).join('');
   el('actRunSummary').textContent = `${record.images.length} 张图片 · ${record.crops.length} 个目标`;
-  renderCrops(); renderEditor(); sync();
+  renderActionFilters(); renderCrops(); renderEditor(); sync();
 }
 
 async function openRun(id) {
@@ -119,7 +120,7 @@ function renderCrops() {
   for (const item of items) {
     const state = item.action?.state || (item.status === 'failed' ? '分析失败' : '待分析');
     counts[state] = (counts[state] || 0)+1;
-    if (filter !== 'all' && filter !== item.status && filter !== item.action?.state) continue;
+    if (filter !== 'all' && (filter.startsWith('action:') ? filter.slice(7) !== item.action?.state : filter !== item.status)) continue;
     const card = document.createElement('article');
     card.className = `action-crop-card${item.crop_id === activeCrop ? ' is-active' : ''}`;
     card.innerHTML = `<div class="action-crop-title"><b>${esc(item.crop_id)}</b><input type="checkbox" aria-label="选择目标 ${esc(item.crop_id)}"></div>
@@ -138,6 +139,15 @@ function renderCrops() {
   }
   if (!grid.children.length) grid.innerHTML = `<div class="empty">${items.length ? '当前筛选下没有目标。' : '暂无裁剪，请先选择图片进行 Head 检测。'}</div>`;
   el('actCounts').textContent = Object.entries(counts).map(([name, count]) => `${name} ${count}`).join(' · ') || '暂无目标';
+}
+
+function renderActionFilters() {
+  const select = el('actFilter'), previous = select.value;
+  const states = [...new Set([...getPromptStates(), ...(record?.crops || []).map(item => item.action?.state).filter(Boolean)])];
+  select.innerHTML = '<option value="all">全部动作</option><option value="pending">待分析</option><option value="failed">分析失败</option>' +
+    states.map(state => `<option value="action:${esc(state)}">${esc(state)}</option>`).join('');
+  select.value = states.some(state => `action:${state}` === previous) || ['all', 'pending', 'failed'].includes(previous) ? previous : 'all';
+  el('actEnabledActions').textContent = getPromptStates().filter(state => state !== '无法判断').join(' / ');
 }
 
 function editorBox() { return ['actX1', 'actY1', 'actX2', 'actY2'].map(id => Number(el(id).value)); }
@@ -208,7 +218,7 @@ el('actSaveRegion').addEventListener('click', () => command(async () => {
 }));
 el('actResetRegion').addEventListener('click', renderEditor);
 el('actDefaultExpansion').addEventListener('click', () => {
-  el('actSide').value = 1; el('actTop').value = 0; el('actBelow').value = 1.3;
+  el('actSide').value = .85; el('actTop').value = 0; el('actBelow').value = 1.3;
   previewExpansion();
 });
 async function startAnalysis(ids) {
@@ -271,10 +281,12 @@ el('actSourceView').addEventListener('pointercancel', () => { pointerStart = nul
 async function loadActions() {
   try {
     clearError();
-    const [, runs] = await Promise.all([loadImages(), loadRuns(), checkModel()]);
+    const [, runs] = await Promise.all([loadImages(), loadRuns(), checkModel(), loadActionPrompts()]);
     if (!record && runs.length && !activeJob) await openRun(runs[0].run_id);
     expansionLabels(); sync();
   } catch (err) { error(err); }
 }
 
 export { loadActions };
+
+initPromptEditor(() => { renderActionFilters(); renderCrops(); });

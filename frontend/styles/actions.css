@@ -47,6 +47,20 @@
 #tab-actions .action-crop-source { color:#82909e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:6px; }
 #tab-actions .action-crop-info button { width:100%; margin-top:8px; }
 #tab-actions details { font-size:12px; color:#856629; margin-top:12px; }
+#tab-actions .action-prompt-settings { background:#fff; border:1px solid #e2e7ee; border-radius:10px; margin:0 0 16px; color:#283849; }
+#tab-actions .action-prompt-settings > summary { cursor:pointer; padding:12px 15px; font-weight:600; }
+#tab-actions .action-prompt-body { padding:0 15px 15px; }
+#tab-actions .action-rule-scroll { overflow-x:auto; }
+#tab-actions .action-rule-table { width:100%; min-width:650px; border-collapse:collapse; margin-bottom:10px; }
+#tab-actions .action-rule-table th, #tab-actions .action-rule-table td { padding:7px; border-bottom:1px solid #e5eaf0; text-align:left; vertical-align:middle; }
+#tab-actions .action-rule-table th:first-child { width:45px; }
+#tab-actions .action-rule-table input[data-cfg=name] { width:130px; border:1px solid #d3dbe5; border-radius:4px; padding:6px; }
+#tab-actions .action-rule-table input[data-cfg=priority] { width:62px; }
+#tab-actions .action-rule-table textarea { width:100%; min-width:230px; resize:vertical; }
+#tab-actions .action-prompt-instructions { display:flex; flex-direction:column; align-items:stretch; gap:6px; }
+#tab-actions .action-prompt-settings textarea { border:1px solid #d3dbe5; border-radius:5px; padding:8px; font:inherit; line-height:1.6; color:#283849; }
+#tab-actions .action-prompt-advanced > textarea { display:block; width:100%; margin:7px 0; font-family:Consolas,monospace; font-size:12px; }
+#tab-actions .action-prompt-advanced summary { cursor:pointer; }
 @media(max-width:850px) {
   #tab-actions .action-layout { grid-template-columns:1fr; }
   #tab-actions .action-image-grid { grid-template-columns:repeat(auto-fill,minmax(100px,1fr)); max-height:220px; }

@@ -9,7 +9,7 @@ from pathlib import Path
 import head_fusion
 import vision
 
-from . import store, vlm
+from . import prompts, store, vlm
 from .regions import Expansion
 
 JOBS: dict[str, dict] = {}
@@ -131,11 +131,19 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
         if not ids:
             raise ValueError("该批次没有可分析的裁剪，请先检测并生成区域")
         items = [store.find_crop(record, crop_id) for crop_id in ids]
+        # A running batch keeps one immutable profile even if the user saves new rules.
+        profile = prompts.load()
+        profile_id = prompts.identifier(profile)
         ready = vlm.status(model, quantization)
         if not ready["available"]:
             raise ValueError(ready["message"])
 
         def work(job_id, event):
+            record.setdefault("prompt_profiles", {})[profile_id] = {
+                "config": profile, "compiled_prompt": prompts.compile_prompt(profile),
+                "prompt_version": prompts.VERSION}
+            record["last_prompt_config_id"] = profile_id
+            store.write(record)
             # Free Head detector caches before loading the VLM on a 12 GB GPU.
             vision.clear_model_cache()
             for index, item in enumerate(items, 1):
@@ -145,12 +153,12 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
                 update(job_id, message=f"动作分析 {index}/{len(items)}：{item['crop_id']}（首次需要加载模型）")
                 started = time.perf_counter()
                 try:
-                    key = vlm.cache_key(path, model, quantization)
+                    key = vlm.cache_key(path, model, quantization, profile)
                     if not force and item.get("analysis_key") == key and item.get("status") == "done":
                         update(job_id, cached=get(job_id)["cached"]+1)
                     else:
-                        result = vlm.analyze(path, model, quantization)
-                        item.update({"action": {**result, "analyzed_at": store.now()}, "status": "done",
+                        result = vlm.analyze(path, model, quantization, profile)
+                        item.update({"action": {**result, "analyzed_at": store.now(), "prompt_config_id": profile_id}, "status": "done",
                                      "analysis_key": key, "elapsed_seconds": round(time.perf_counter()-started, 2)})
                         item.pop("error", None)
                 except Exception as error:

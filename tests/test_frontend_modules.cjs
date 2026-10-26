@@ -65,6 +65,10 @@ const responses = {
   '/api/head-cuts': { runs: [] },
   '/api/actions/runs': { runs: [] },
   '/api/actions/status?model=4b&quantization=4bit': { available: false, message: '模型尚未下载', active_job: null },
+  '/api/actions/prompt': (() => {
+    const config = JSON.parse(fs.readFileSync(path.resolve(root, '../action_recognition/default_prompt.json'), 'utf8'));
+    return { config, defaults: config, states: config.actions.filter(item => item.enabled).map(item => item.name).concat('无法判断'), config_id: 'fixture_config', compiled_prompt: '固定指令与可装配动作规则' };
+  })(),
 };
 const context = vm.createContext({
   console, setTimeout, clearTimeout, AbortController, URLSearchParams,
@@ -104,7 +108,7 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
     assert(match[1].endsWith(`?v=${styleVersion}`), `Stylesheet has stale asset version: ${match[1]}`);
   }
   await entry.evaluate(); await flush();
-  assert.equal(modules.size, 17);
+  assert.equal(modules.size, 18);
   assert(calls.includes('/api/yolo/status'));
   assert(calls.includes('/api/images'));
   assert(calls.includes('/api/videos'));
@@ -481,5 +485,5 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
   assert.equal(aggregateSubtabs[0].dataset.agg, 'images');
   assert.equal(nodes.get('aggRefresh').hidden, true);
   assert.equal(nodes.has('globalBanner'), false);
-  console.log('ES module startup, navigation and result viewer checks passed (17 modules, real HTML IDs).');
+  console.log('ES module startup, navigation and result viewer checks passed (18 modules, real HTML IDs).');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

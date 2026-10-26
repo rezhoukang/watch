@@ -11,15 +11,15 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app
-from action_recognition import jobs, store, vlm
+from action_recognition import jobs, prompts, store, vlm
 from action_recognition.regions import Expansion, estimate, render_crop
 from web import common
 
 
 class RegionTests(unittest.TestCase):
     def test_expansion_uses_head_width_and_height_and_clips_to_image(self):
-        self.assertEqual(estimate([40, 10, 60, 30], 160, 120, Expansion()), [20, 10, 80, 56])
-        self.assertEqual(estimate([130, 90, 150, 110], 160, 120, Expansion()), [110, 90, 160, 120])
+        self.assertEqual(estimate([40, 10, 60, 30], 160, 120, Expansion()), [23, 10, 77, 56])
+        self.assertEqual(estimate([130, 90, 150, 110], 160, 120, Expansion()), [113, 90, 160, 120])
 
     def test_rectangular_crop_keeps_scene_around_target_without_polygon_mask(self):
         source = Image.new('RGB', (160, 120), 'white')
@@ -43,20 +43,20 @@ class VlmResponseTests(unittest.TestCase):
     def test_requested_five_actions_and_unknown_are_the_only_current_labels(self):
         self.assertEqual(set(vlm.STATES), {'抬头', '低头', '低头玩手机', '低头看书', '睡觉', '无法判断'})
         for state in vlm.STATES:
-            self.assertEqual(vlm.parse_response(json.dumps({'state': state, 'evidence': '可见姿态证据'}))['state'], state)
+            self.assertEqual(vlm.parse_response(json.dumps({'state': state, 'evidence': '可见姿态证据'}), vlm.STATES)['state'], state)
         with self.assertRaises(ValueError):
-            vlm.parse_response(json.dumps({'state': '疑似阅读', 'evidence': '旧类别'}))
+            vlm.parse_response(json.dumps({'state': '疑似阅读', 'evidence': '旧类别'}), vlm.STATES)
 
     def test_single_state_and_evidence_are_required(self):
-        value = vlm.parse_response(json.dumps({'state': '低头', 'evidence': '头部向下', 'uncertainty': '手被遮挡'}))
+        value = vlm.parse_response(json.dumps({'state': '低头', 'evidence': '头部向下', 'uncertainty': '手被遮挡'}), vlm.STATES)
         self.assertEqual(value['state'], '低头')
         for text in ('not JSON', '{}', '{"state":"专心","evidence":"x"}', '{"state":"低头","evidence":[]}'):
             with self.assertRaises(ValueError):
-                vlm.parse_response(text)
+                vlm.parse_response(text, vlm.STATES)
 
     def test_unknown_is_a_valid_result_and_fences_are_tolerated(self):
         text = json.dumps({'state': '无法判断', 'evidence': '目标被遮挡'})
-        self.assertEqual(vlm.parse_response('```json\n'+text+'\n```')['state'], '无法判断')
+        self.assertEqual(vlm.parse_response('```json\n'+text+'\n```', vlm.STATES)['state'], '无法判断')
 
 
 class ActionApiTests(unittest.TestCase):
@@ -110,7 +110,7 @@ class ActionApiTests(unittest.TestCase):
         record = self.prepare()
         self.assertEqual(record['crop_count'], 2)
         self.assertEqual(record['crops'][0]['crop_id'], 'HC001-001')
-        self.assertEqual(record['crops'][0]['region_bbox'], [20, 10, 80, 56])
+        self.assertEqual(record['crops'][0]['region_bbox'], [23, 10, 77, 56])
         self.assertEqual(record['crops'][0]['roi_shape'], 'head_context_rectangle_v1')
         self.assertEqual(len(record['crops'][0]['roi_polygon']), 4)
         self.assertEqual(self.detector.call_count, 1)
@@ -195,6 +195,61 @@ class ActionApiTests(unittest.TestCase):
             response = self.client.post(f'/api/actions/runs/{run_id}/analyze', json={})
         self.assertEqual(response.status_code, 400)
         self.analyzer.assert_not_called()
+
+    def test_custom_action_profile_persists_and_preview_does_not_save(self):
+        original = self.client.get('/api/actions/prompt').json()
+        config = original['config']
+        yawn = next(item for item in config['actions'] if item['name'] == '打哈欠')
+        self.assertFalse(yawn['enabled'])
+        yawn['enabled'] = True
+        preview = self.client.post('/api/actions/prompt/preview', json=config)
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertIn('打哈欠', preview.json()['states'])
+        self.assertNotIn('打哈欠', self.client.get('/api/actions/prompt').json()['states'])
+        saved = self.client.put('/api/actions/prompt', json=config)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(self.client.get('/api/actions/prompt').json()['config_id'], saved.json()['config_id'])
+        self.assertTrue((store.ROOT / 'prompt_config.json').is_file())
+        self.assertIn('打哈欠', saved.json()['compiled_prompt'])
+        result = vlm.parse_response(json.dumps({'state': '打哈欠', 'evidence': '目标嘴部明显张大'}), saved.json()['states'])
+        self.assertEqual(result['state'], '打哈欠')
+
+    def test_profile_changes_invalidate_cache_without_erasing_old_results(self):
+        record = self.prepare(); run_id = record['run_id']; crop_id = record['crops'][0]['crop_id']
+        self.analyze(run_id, crop_ids=[crop_id]); old = store.read(run_id)['crops'][0]['action']['prompt_config_id']
+        config = self.client.get('/api/actions/prompt').json()['config']
+        config['instructions'] += '新规则说明'
+        self.assertEqual(self.client.put('/api/actions/prompt', json=config).status_code, 200)
+        self.assertEqual(store.read(run_id)['crops'][0]['action']['prompt_config_id'], old)
+        self.analyze(run_id, crop_ids=[crop_id])
+        saved = store.read(run_id)
+        self.assertEqual(self.analyzer.call_count, 2)
+        self.assertNotEqual(saved['crops'][0]['action']['prompt_config_id'], old)
+        self.assertEqual(len(saved['prompt_profiles']), 2)
+
+    def test_inflight_batch_uses_one_snapshot_when_configuration_is_saved(self):
+        record = self.prepare(); run_id = record['run_id']
+        before = prompts.load(); seen = []
+        def analyze(path, model, quantization, profile):
+            seen.append(prompts.identifier(profile))
+            changed = prompts.defaults(); changed['instructions'] = '保存到下一次任务'
+            prompts.save(changed)
+            return {'state': '低头', 'evidence': '目标头部向下', 'uncertainty': ''}
+        self.analyzer.side_effect = analyze
+        self.analyze(run_id)
+        self.assertEqual(seen, [prompts.identifier(before)]*2)
+        self.assertNotEqual(prompts.identifier(prompts.load()), seen[0])
+
+    def test_invalid_profiles_are_rejected(self):
+        config = prompts.defaults()
+        config['actions'][1]['name'] = config['actions'][0]['name']
+        self.assertEqual(self.client.put('/api/actions/prompt', json=config).status_code, 422)
+        config = prompts.defaults()
+        for action in config['actions']:
+            action['enabled'] = False
+        self.assertEqual(self.client.put('/api/actions/prompt', json=config).status_code, 422)
+        config = prompts.defaults(); config['actions'][0]['rule'] = '  '
+        self.assertEqual(self.client.put('/api/actions/prompt', json=config).status_code, 422)
 
 
 if __name__ == '__main__':

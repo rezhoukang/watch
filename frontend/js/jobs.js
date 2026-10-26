@@ -1,4 +1,4 @@
-import { esc, api, banner, showError } from './core.js?v=94';
+import { esc, api, banner, showError } from './core.js?v=95';
 
 /* ==================== 通用：轮询后台任务 ====================
  * - 单次查询 15 秒超时

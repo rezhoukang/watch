@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from action_recognition import jobs, store, vlm
+from action_recognition import jobs, prompts, store, vlm
 from action_recognition.regions import Expansion
 from project_paths import IMAGE_EXTENSIONS
 from . import common
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/actions", tags=["独立动作识别"])
 
 
 class ExpansionRequest(BaseModel):
-    side: float = Field(default=1.0, ge=0, le=5, allow_inf_nan=False)
+    side: float = Field(default=.85, ge=0, le=5, allow_inf_nan=False)
     top: float = Field(default=0.0, ge=0, le=3, allow_inf_nan=False)
     below: float = Field(default=1.3, ge=0, le=12, allow_inf_nan=False)
 
@@ -59,6 +59,21 @@ def status(model: Literal["4b", "2b"] = "4b", quantization: Literal["4bit", "fp1
 @router.post("/model/download")
 def download_model(payload: ModelRequest):
     return _call(jobs.start_download, payload.model)
+
+
+@router.get("/prompt")
+def read_prompt():
+    return _call(prompts.describe)
+
+
+@router.put("/prompt")
+def save_prompt(payload: prompts.PromptConfig):
+    return prompts.describe(_call(prompts.save, payload.model_dump()))
+
+
+@router.post("/prompt/preview")
+def preview_prompt(payload: prompts.PromptConfig):
+    return prompts.describe(payload.model_dump())
 
 
 @router.post("/model/unload")

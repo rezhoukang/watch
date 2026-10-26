@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=61">
+<link rel="stylesheet" href="/style.css?v=62">
 </head>
 <body>
 <div class="app">
@@ -365,6 +365,28 @@
       <button class="btn small ghost" id="actUnload">释放 VLM 显存</button>
       <span id="actModelStatus" class="hint" role="status">进入页面后检查本地模型</span>
     </div>
+    <details class="action-prompt-settings">
+      <summary>动作与提示词配置 <span class="hint">可添加检测词和规则 · JSON 配置 · 单人单状态</span></summary>
+      <div class="action-prompt-body">
+        <p class="hint">优先级越大越优先，只启用需要的动作。“无法判断”始终保留。配置保存后用于下一次分析，不改变运行中任务或已有结果。</p>
+        <div class="action-toolbar">
+          <button class="btn small" id="actPromptAdd">新增动作</button>
+          <button class="btn small ghost" id="actPromptYawn">启用打哈欠示例</button>
+          <button class="btn small ghost" id="actPromptDefaults">载入默认配置</button>
+          <button class="btn small ghost" id="actPromptReload">重新载入已保存配置</button>
+          <button class="btn small" id="actPromptSave">保存配置</button>
+        </div>
+        <div class="action-rule-scroll"><table class="action-rule-table"><thead><tr><th>启用</th><th>动作名称</th><th>优先级</th><th>可见判定规则</th><th></th></tr></thead><tbody id="actPromptRules"></tbody></table></div>
+        <label class="action-prompt-instructions">附加判定说明<textarea id="actPromptInstructions" rows="2" maxlength="4000"></textarea></label>
+        <p id="actPromptStatus" class="hint" role="status">正在加载动作配置…</p>
+        <details class="action-prompt-advanced"><summary>JSON 配置与实际提示词</summary>
+          <p class="hint">配置保存为 JSON；后端将配置组装成文本提示词发送给 VLM，模型也以 JSON 返回动作、证据和不确定原因。</p>
+          <label for="actPromptJson">可编辑的配置 JSON</label><textarea id="actPromptJson" rows="10" spellcheck="false"></textarea>
+          <div class="action-toolbar"><button class="btn small ghost" id="actPromptApplyJson">应用 JSON 到表单</button><button class="btn small ghost" id="actPromptBuild">刷新提示词预览</button></div>
+          <label for="actPromptPreview">实际发送给 VLM 的文本提示词（预览）</label><textarea id="actPromptPreview" rows="10" readonly></textarea>
+        </details>
+      </div>
+    </details>
     <div class="action-layout">
       <aside class="action-panel action-sidebar">
         <h2>1. 选择课堂图片</h2>
@@ -384,7 +406,7 @@
         <section class="action-panel">
           <div class="action-section-head"><h2>2. 检查和调整区域</h2><span id="actRunSummary" class="hint">先选择图片生成裁剪</span></div>
           <div class="action-expansion">
-            <label>左右各扩展 <input id="actSide" type="range" min="0" max="5" step="0.05" value="1"><output id="actSideValue">1.00 倍头宽</output></label>
+            <label>左右各扩展 <input id="actSide" type="range" min="0" max="5" step="0.05" value="0.85"><output id="actSideValue">0.85 倍头宽</output></label>
             <label>顶部留白 <input id="actTop" type="range" min="0" max="3" step="0.05" value="0"><output id="actTopValue">0.00 倍头高</output></label>
             <label>向下延伸 <input id="actBelow" type="range" min="0" max="12" step="0.1" value="1.3"><output id="actBelowValue">1.30 倍头高</output></label>
           </div>
@@ -405,8 +427,8 @@
           <div class="empty" id="actPreviewEmpty">检测后点击下方目标，检查是否包含头部、手和桌面。</div>
         </section>
         <section class="action-panel">
-          <div class="action-section-head"><h2>3. VLM 动作分析</h2><span class="hint">抬头 / 低头 / 低头玩手机 / 低头看书 / 睡觉</span></div>
-          <p class="hint">每人一个状态。睡觉按明显的趴桌或闭眼伏下等可见姿态判断；遮挡、模糊或证据不足时显示无法判断。</p>
+          <div class="action-section-head"><h2>3. VLM 动作分析</h2><span class="hint" id="actEnabledActions">按已保存的启用动作分类</span></div>
+          <p class="hint">每人只输出一个启用动作；遮挡、模糊或证据不足时显示无法判断。动作标准可在上方配置中调整。</p>
           <div class="action-toolbar">
             <button class="btn" id="actAnalyze" disabled>分析全部裁剪</button>
             <button class="btn small ghost" id="actRetry" disabled>重试失败目标</button>
@@ -495,6 +517,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=94"></script>
+<script type="module" src="/app.js?v=95"></script>
 </body>
 </html>
