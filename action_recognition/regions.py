@@ -42,7 +42,7 @@ def estimate(head: list, width: int, height: int, expansion: Expansion) -> list[
 def render_crop(image: Image.Image, region: list, head: list) -> tuple[Image.Image, Image.Image]:
     """Keep a clean rectangular crop and mark only the target head for VLM."""
     box = validate_box(region, *image.size)
-    raw = image.crop(tuple(box))
+    raw = image.crop((box[0], box[1], box[2], box[3]))
     marked = raw.copy()
     drawing = ImageDraw.Draw(marked)
     x1, y1, x2, y2 = head

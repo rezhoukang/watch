@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=62">
+<link rel="stylesheet" href="/style.css?v=64">
 </head>
 <body>
 <div class="app">
@@ -321,9 +321,11 @@
     <div class="toolbar">
       <label><input type="checkbox" id="aggFaceRecognition" checked> 人脸识别（固定配置）</label>
       <label><input type="checkbox" id="aggPose" checked> 姿势检测（固定配置）</label>
+      <label><input type="checkbox" id="aggMultimodal"> 多模态识别</label>
     </div>
+    <p class="hint" id="aggMultimodalHint" hidden>多模态模式：按人头裁剪后使用 VLM 动作分析，读取“动作识别”页已保存的提示词。固定 Qwen3-VL 4B、4-bit、A 基线，裁剪比例 0.85 / 0 / 1.30；不运行 Pose 动作规则，首次需要加载本地模型。</p>
     <p class="hint">人脸识别固定：SCRFD 人脸置信度 0.5 · 识别阈值 0.3 · 质量门槛 0.5 / 24px / 50（已锁死，不开放输入）。</p>
-    <p class="hint">姿势检测固定：yolov8m-pose.pt · 置信度 0.6 · imgsz 640 · 低头 R &lt; 0.05 · 抬头 R &gt; 0.20 · 全图物体检测与关联（Pose 框）开启 · 物体置信度 ≥ 0.03。举手优先，无法判断的姿势直接排除。</p>
+    <p class="hint" id="aggPoseHint">姿势检测固定：yolov8m-pose.pt · 置信度 0.6 · imgsz 640 · 低头 R &lt; 0.05 · 抬头 R &gt; 0.20 · 全图物体检测与关联（Pose 框）开启 · 物体置信度 ≥ 0.03。举手优先，无法判断的姿势直接排除。</p>
     <p class="hint">目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.55（已锁死，前端不开放）。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
 
     <nav class="subnav">
@@ -371,7 +373,6 @@
         <p class="hint">优先级越大越优先，只启用需要的动作。“无法判断”始终保留。配置保存后用于下一次分析，不改变运行中任务或已有结果。</p>
         <div class="action-toolbar">
           <button class="btn small" id="actPromptAdd">新增动作</button>
-          <button class="btn small ghost" id="actPromptYawn">启用打哈欠示例</button>
           <button class="btn small ghost" id="actPromptDefaults">载入默认配置</button>
           <button class="btn small ghost" id="actPromptReload">重新载入已保存配置</button>
           <button class="btn small" id="actPromptSave">保存配置</button>
@@ -430,15 +431,31 @@
           <div class="action-section-head"><h2>3. VLM 动作分析</h2><span class="hint" id="actEnabledActions">按已保存的启用动作分类</span></div>
           <p class="hint">每人只输出一个启用动作；遮挡、模糊或证据不足时显示无法判断。动作标准可在上方配置中调整。</p>
           <div class="action-toolbar">
+            <label>解码实验 <select id="actExperiment">
+              <option value="A">A 基线 · 贪心 · 1 束 · 输出上限 256</option>
+              <option value="B">B 束搜索 · 2 束 · 输出上限 256</option>
+              <option value="C">C 束搜索 · 3 束 · 输出上限 256</option>
+              <option value="D">D 输出预算 · 贪心 · 1 束 · 输出上限 128</option>
+            </select></label>
+            <span class="hint">均关闭采样；B、C 增加计算和显存开销，不保证更准确。</span>
+          </div>
+          <div class="action-toolbar">
             <button class="btn" id="actAnalyze" disabled>分析全部裁剪</button>
             <button class="btn small ghost" id="actRetry" disabled>重试失败目标</button>
-            <label><input id="actForce" type="checkbox">重新分析已有结果</label>
+            <label><input id="actForce" type="checkbox" checked>重新分析已有结果（实验建议开启）</label>
             <button class="btn small danger" id="actCancel" hidden>取消任务</button>
           </div>
           <div class="action-progress" id="actProgress" role="status" aria-live="polite"></div>
+          <details class="action-experiments">
+            <summary>解码实验记录与对照</summary>
+            <p class="hint">固定同一批目标、裁剪、模型和提示词，依次运行 A～D。各次结果独立保存；无人工真值时不计算准确率。缓存项不参与性能统计。</p>
+            <p class="hint">生成耗时不含模型加载；显存为当前 CUDA 设备生成阶段 PyTorch 已分配峰值，包含模型常驻张量，不等于整卡显存。裁剪或规则变化后的记录不能直接作为单因素对照。</p>
+            <button class="btn small ghost" id="actExportExperiments" disabled>导出实验记录 JSON</button>
+            <div id="actExperimentHistory" class="action-experiment-history"><p class="hint">分析后显示实验记录。</p></div>
+          </details>
           <div class="action-toolbar">
             <label><input id="actCropSelectAll" type="checkbox">选择全部目标</label>
-            <label>显示 <select id="actFilter"><option value="all">全部动作</option><option value="pending">待分析</option><option value="failed">分析失败</option><option>抬头</option><option>低头</option><option>低头玩手机</option><option>低头看书</option><option>睡觉</option><option>无法判断</option></select></label>
+            <label>显示 <select id="actFilter"><option value="all">全部动作</option><option value="pending">待分析</option><option value="failed">分析失败</option><option>抬头</option><option>低头</option><option>低头看手机</option><option>低头看书</option><option>睡觉</option><option>无法判断</option></select></label>
             <span id="actCounts" class="hint">暂无目标</span>
           </div>
           <p id="actError" class="status" role="alert"></p>
@@ -517,6 +534,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=95"></script>
+<script type="module" src="/app.js?v=101"></script>
 </body>
 </html>

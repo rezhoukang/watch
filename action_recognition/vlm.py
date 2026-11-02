@@ -4,13 +4,14 @@ import hashlib
 import importlib.util
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
 from project_paths import MODELS_DIR
-from . import prompts
+from . import decoding, prompts
 
 MODELS = {"4b": "Qwen/Qwen3-VL-4B-Instruct", "2b": "Qwen/Qwen3-VL-2B-Instruct"}
 DEFAULT_MODEL = "4b"
@@ -20,6 +21,13 @@ _lock = threading.RLock()
 _model: Any = None
 _processor: Any = None
 _loaded: tuple[str, str] | None = None
+
+
+class ResponseError(ValueError):
+    def __init__(self, message: str, metrics: dict, raw_response: str):
+        super().__init__(message)
+        self.metrics = metrics
+        self.raw_response = raw_response
 
 
 def model_path(key: str) -> Path:
@@ -129,19 +137,24 @@ def parse_response(text: str, allowed_states: list[str] | tuple[str, ...] | None
             "uncertainty": value.get("uncertainty", "").strip()[:400]}
 
 
-def cache_key(path: Path, key: str, quantization: str, prompt_config: dict | None = None) -> str:
+def cache_key(path: Path, key: str, quantization: str, prompt_config: dict | None = None, experiment: str = 'A') -> str:
     profile = prompts.load() if prompt_config is None else prompts.normalize(prompt_config)
     digest = hashlib.sha256(path.read_bytes())
     digest.update(f"{MODELS[key]}|{quantization}|{PROMPT_VERSION}|{prompts.identifier(profile)}|{prompts.compile_prompt(profile)}".encode())
+    digest.update(json.dumps(decoding.parameters(experiment), sort_keys=True).encode())
     return digest.hexdigest()
 
 
-def analyze(path: Path, key: str = DEFAULT_MODEL, quantization: str = "4bit", prompt_config: dict | None = None) -> dict:
+def analyze(path: Path, key: str = DEFAULT_MODEL, quantization: str = "4bit", prompt_config: dict | None = None, experiment: str = 'A') -> dict:
     with _lock:
         import torch
 
         profile = prompts.load() if prompt_config is None else prompts.normalize(prompt_config)
+        generation = decoding.parameters(experiment)
+        cold_load = _loaded != (key, quantization)
+        load_started = time.perf_counter()
         model, processor = _load(key, quantization)
+        load_seconds = time.perf_counter() - load_started
         with Image.open(path) as opened:
             image = opened.convert("RGB")
         # Bound visual-token use without stretching or synthesizing detail.
@@ -151,10 +164,28 @@ def analyze(path: Path, key: str = DEFAULT_MODEL, quantization: str = "4bit", pr
         inputs = processor.apply_chat_template(messages, tokenize=True, add_generation_prompt=True,
                                                return_dict=True, return_tensors="pt")
         inputs = {name: value.to(model.device) for name, value in inputs.items()}
+        device = model.device
+        gpu = device.type == 'cuda'
+        if gpu:
+            torch.cuda.synchronize(device)
+            torch.cuda.reset_peak_memory_stats(device)
+        started = time.perf_counter()
         with torch.inference_mode():
-            generated = model.generate(**inputs, max_new_tokens=256, do_sample=False)
+            generated = model.generate(**inputs, **generation)
+        if gpu:
+            torch.cuda.synchronize(device)
+        metrics = {'generation_seconds': round(time.perf_counter() - started, 4),
+                   'model_load_seconds': round(load_seconds, 4), 'cold_load': cold_load,
+                   'generated_tokens': int(generated.shape[1] - inputs['input_ids'].shape[1]),
+                   'peak_allocated_mib': round(torch.cuda.max_memory_allocated(device) / 1024**2, 1) if gpu else None,
+                   'cuda_device': str(device) if gpu else None}
         answer = processor.batch_decode(generated[:, inputs["input_ids"].shape[1]:],
                                         skip_special_tokens=True)[0]
-        result = parse_response(answer, prompts.states(profile))
+        try:
+            result = parse_response(answer, prompts.states(profile))
+        except ValueError as error:
+            # Keep measurement and raw output for failed/truncated experiment responses too.
+            raise ResponseError(str(error), metrics, answer) from error
         return {**result, "model": MODELS[key], "quantization": quantization,
+                'decoding': decoding.describe(experiment), 'metrics': metrics,
                 "prompt_version": PROMPT_VERSION, "prompt_config_id": prompts.identifier(profile)}

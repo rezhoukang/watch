@@ -92,15 +92,6 @@ function initPromptEditor(callback) {
     if (jsonDirty) renderForm(draft());
     addRow({ name: '', enabled: true, priority: 50, rule: '' }); dirty();
   }));
-  el('actPromptYawn').addEventListener('click', () => operation(async () => {
-    const config = draft();
-    let action = config.actions.find(item => item.name === '打哈欠');
-    if (!action) {
-      action = structuredClone(defaults.actions.find(item => item.name === '打哈欠'));
-      config.actions.push(action);
-    }
-    action.enabled = true; renderForm(config); dirty();
-  }));
   el('actPromptSave').addEventListener('click', () => operation(async () => {
     const config = draft();
     const data = await api('/api/actions/prompt', { ...payload(config), method: 'PUT' });

@@ -1,6 +1,7 @@
 """Serial, cancellable action jobs isolated from existing inference modules."""
 import contextlib
 import copy
+import hashlib
 import threading
 import time
 import uuid
@@ -9,7 +10,7 @@ from pathlib import Path
 import head_fusion
 import vision
 
-from . import prompts, store, vlm
+from . import decoding, prompts, store, vlm
 from .regions import Expansion
 
 JOBS: dict[str, dict] = {}
@@ -122,7 +123,7 @@ def start_prepare(paths: list[Path], expansion: Expansion) -> dict:
         raise
 
 
-def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: str, force: bool) -> dict:
+def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: str, force: bool, experiment: str = 'A') -> dict:
     if not _worker.acquire(blocking=False):
         raise RuntimeError("已有动作识别任务正在运行")
     try:
@@ -134,6 +135,7 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
         # A running batch keeps one immutable profile even if the user saves new rules.
         profile = prompts.load()
         profile_id = prompts.identifier(profile)
+        decode = decoding.describe(experiment)
         ready = vlm.status(model, quantization)
         if not ready["available"]:
             raise ValueError(ready["message"])
@@ -144,37 +146,67 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
                 "prompt_version": prompts.VERSION}
             record["last_prompt_config_id"] = profile_id
             store.write(record)
-            # Free Head detector caches before loading the VLM on a 12 GB GPU.
-            vision.clear_model_cache()
-            for index, item in enumerate(items, 1):
-                if event.is_set():
-                    break
-                path = store.folder(run_id) / item["marked_file"]
-                update(job_id, message=f"动作分析 {index}/{len(items)}：{item['crop_id']}（首次需要加载模型）")
-                started = time.perf_counter()
-                try:
-                    key = vlm.cache_key(path, model, quantization, profile)
-                    if not force and item.get("analysis_key") == key and item.get("status") == "done":
-                        update(job_id, cached=get(job_id)["cached"]+1)
-                    else:
-                        result = vlm.analyze(path, model, quantization, profile)
-                        item.update({"action": {**result, "analyzed_at": store.now(), "prompt_config_id": profile_id}, "status": "done",
-                                     "analysis_key": key, "elapsed_seconds": round(time.perf_counter()-started, 2)})
-                        item.pop("error", None)
-                except Exception as error:
-                    item.update({"status": "failed", "error": str(error), "action": None, "analysis_key": None})
-                    update(job_id, errors=get(job_id)["errors"]+1)
-                    # A failed model load / CUDA OOM is shared by every target; don't repeat it hundreds of times.
-                    if isinstance(error, RuntimeError):
-                        store.write(record)
-                        raise
+            session = {'session_id': job_id, 'started_at': store.now(), 'status': 'running',
+                       'decoding': decode, 'model': vlm.MODELS[model], 'quantization': quantization,
+                       'prompt_config_id': profile_id, 'force': force, 'total': len(items), 'results': []}
+            record.setdefault('analysis_sessions', []).append(session)
+            store.write(record)
+            session_started = time.perf_counter()
+            try:
+                _analyze_items(job_id, event, record, items, model, quantization, force, profile, profile_id, experiment, session)
+                session['status'] = 'cancelled' if event.is_set() else 'completed'
+            except Exception:
+                session['status'] = 'failed'
+                raise
+            finally:
+                session['finished_at'] = store.now()
+                session['elapsed_seconds'] = round(time.perf_counter() - session_started, 3)
                 store.write(record)
-                update(job_id, progress=index)
 
         return _launch("analyze", run_id, len(items), work)
     except Exception:
         _worker.release()
         raise
+
+
+def _analyze_items(job_id, event, record, items, model, quantization, force, profile, profile_id, experiment, session):
+    # Free Head detector caches before loading the VLM on a 12 GB GPU.
+    vision.clear_model_cache()
+    for index, item in enumerate(items, 1):
+        if event.is_set():
+            break
+        path = store.folder(record['run_id']) / item["marked_file"]
+        update(job_id, message=f"动作分析 {index}/{len(items)}：{item['crop_id']}（首次需要加载模型）")
+        started = time.perf_counter()
+        measurement = {'crop_id': item['crop_id'], 'source': item['source'],
+                       'region_bbox': list(item['region_bbox']), 'revision': item['revision']}
+        try:
+            measurement['input_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+            key = vlm.cache_key(path, model, quantization, profile, experiment)
+            if not force and item.get("analysis_key") == key and item.get("status") == "done":
+                update(job_id, cached=get(job_id)["cached"]+1)
+                measurement['cached'] = True
+            else:
+                result = vlm.analyze(path, model, quantization, profile, experiment)
+                item.update({"action": {**result, "decoding": decoding.describe(experiment), "analyzed_at": store.now(), "prompt_config_id": profile_id}, "status": "done",
+                             "analysis_key": key, "elapsed_seconds": round(time.perf_counter()-started, 2)})
+                item.pop("error", None)
+            measurement.update(status='done', action=copy.deepcopy(item['action']))
+        except Exception as error:
+            item.update({"status": "failed", "error": str(error), "action": None, "analysis_key": None})
+            item['elapsed_seconds'] = round(time.perf_counter()-started, 2)
+            update(job_id, errors=get(job_id)["errors"]+1)
+            measurement.update(status='failed', error=str(error),
+                               metrics=getattr(error, 'metrics', None),
+                               raw_response=getattr(error, 'raw_response', None))
+            # A failed model load / CUDA OOM is shared by every target; don't repeat it hundreds of times.
+            if isinstance(error, RuntimeError):
+                raise
+        finally:
+            measurement['elapsed_seconds'] = round(time.perf_counter()-started, 3)
+            session['results'].append(measurement)
+            store.write(record)
+        update(job_id, progress=index)
 
 
 def start_download(model: str) -> dict:

@@ -256,6 +256,11 @@
 .agg-steps { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .agg-step { padding: 3px 8px; border-radius: 12px; background: #e8f0fe; color: #1a4b8f; font-size: 11px; }
 .agg-step.is-off { background: #f1f3f4; color: #80868b; }
+.aggregate-progress { padding:12px; margin-bottom:10px; border:1px solid #dce5ef; border-radius:8px; background:#f8fbff; }
+.aggregate-progress label { display:block; font-size:13px; }
+.aggregate-progress progress { display:block; width:100%; height:10px; margin:8px 0; accent-color:#1a73e8; }
+.agg-step.is-running { outline:1px solid #1a73e8; font-weight:600; }
+.agg-step.is-failed { background:#fce8e6; color:#b3261e; }
 .agg-name { color: #137333; }
 .agg-muted { color: #bdc1c6; }
 /* 聚合结果里 hover 已识别的 head 框 → 在框正下方浮出人像库登记照（固定 250×250 正方形，不随框缩放）

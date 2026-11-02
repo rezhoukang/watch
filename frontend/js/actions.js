@@ -1,6 +1,7 @@
 import { el, esc, api } from './core.js?v=95';
 import { bindImageHover } from './preview.js?v=95';
-import { getPromptStates, initPromptEditor, loadActionPrompts } from './action-prompts.js?v=95';
+import { getPromptStates, initPromptEditor, loadActionPrompts } from './action-prompts.js?v=96';
+import { renderExperiments } from './action-experiments.js?v=97';
 
 // Independent module: anonymous Head IDs, original-image crops, local VLM only.
 let images = [], record = null, activeCrop = '', activeJob = null, timer = null;
@@ -31,7 +32,7 @@ function sync() {
   el('actCropSelectAll').checked = count > 0 && selectedCrops.size === count;
   for (const id of ['actModel', 'actQuantization', 'actDownload', 'actUnload', 'actRun', 'actSide', 'actTop',
     'actBelow', 'actSource', 'actX1', 'actY1', 'actX2', 'actY2', 'actUpload', 'actRefresh', 'actSelectAll',
-    'actCropSelectAll', 'actDraw', 'actResetRegion', 'actDefaultExpansion']) el(id).disabled = running;
+    'actCropSelectAll', 'actDraw', 'actResetRegion', 'actDefaultExpansion', 'actExperiment', 'actForce']) el(id).disabled = running;
   el('actImageGrid').querySelectorAll('input').forEach(input => { input.disabled = running; });
   el('actCropGrid').querySelectorAll('input, button').forEach(input => { input.disabled = running; });
 }
@@ -104,7 +105,7 @@ function applyRecord(data, keepSelection = true) {
   el('actErrors').hidden = !runErrors.length;
   el('actErrorList').innerHTML = runErrors.map(item => `<p>${esc(item.source)}：${esc(item.message)}</p>`).join('');
   el('actRunSummary').textContent = `${record.images.length} 张图片 · ${record.crops.length} 个目标`;
-  renderActionFilters(); renderCrops(); renderEditor(); sync();
+  renderActionFilters(); renderCrops(); renderEditor(); renderExperiments(record); sync();
 }
 
 async function openRun(id) {
@@ -120,15 +121,19 @@ function renderCrops() {
   for (const item of items) {
     const state = item.action?.state || (item.status === 'failed' ? '分析失败' : '待分析');
     counts[state] = (counts[state] || 0)+1;
-    if (filter !== 'all' && (filter.startsWith('action:') ? filter.slice(7) !== item.action?.state : filter !== item.status)) continue;
+    if (filter === 'legacy') {
+      if (!item.action?.state || getPromptStates().includes(item.action.state)) continue;
+    } else if (filter !== 'all' && (filter.startsWith('action:') ? filter.slice(7) !== item.action?.state : filter !== item.status)) continue;
     const card = document.createElement('article');
     card.className = `action-crop-card${item.crop_id === activeCrop ? ' is-active' : ''}`;
     card.innerHTML = `<div class="action-crop-title"><b>${esc(item.crop_id)}</b><input type="checkbox" aria-label="选择目标 ${esc(item.crop_id)}"></div>
       <img src="${esc(fileUrl(item.marked_file, item.revision))}" alt="${esc(item.crop_id)} 目标裁剪" loading="lazy">
       <div class="action-crop-info"><span class="action-state${item.status === 'failed' ? ' is-failed' : state === '无法判断' ? ' is-uncertain' : ''}">${esc(state)}</span>
+      ${item.action?.state && !getPromptStates().includes(item.action.state) ? '<p class="hint">历史标签；重新分析后使用当前动作配置。</p>' : ''}
       <p class="action-evidence">${esc(item.action?.evidence || item.error || '检查范围后启动 VLM 分析')}</p>
       ${item.action?.uncertainty ? `<p class="action-reason">${esc(item.action.uncertainty)}</p>` : ''}
       <p class="action-crop-source" title="${esc(item.source)}">${esc(item.source)}${item.elapsed_seconds != null ? ` · ${item.elapsed_seconds}s` : ''}</p>
+      ${item.action?.decoding ? `<p class="hint">${esc(item.action.decoding.label)} · ${item.action.decoding.num_beams} 束 · 上限 ${item.action.decoding.max_new_tokens}</p>` : ''}
       <button class="btn small ghost" type="button">检查 / 调整区域</button></div>`;
     const checkbox = card.querySelector('input'); checkbox.checked = selectedCrops.has(item.crop_id);
     checkbox.addEventListener('change', () => { if (checkbox.checked) selectedCrops.add(item.crop_id); else selectedCrops.delete(item.crop_id); sync(); });
@@ -143,10 +148,12 @@ function renderCrops() {
 
 function renderActionFilters() {
   const select = el('actFilter'), previous = select.value;
-  const states = [...new Set([...getPromptStates(), ...(record?.crops || []).map(item => item.action?.state).filter(Boolean)])];
+  const states = getPromptStates();
+  const legacy = (record?.crops || []).some(item => item.action?.state && !states.includes(item.action.state));
   select.innerHTML = '<option value="all">全部动作</option><option value="pending">待分析</option><option value="failed">分析失败</option>' +
-    states.map(state => `<option value="action:${esc(state)}">${esc(state)}</option>`).join('');
-  select.value = states.some(state => `action:${state}` === previous) || ['all', 'pending', 'failed'].includes(previous) ? previous : 'all';
+    states.map(state => `<option value="action:${esc(state)}">${esc(state)}</option>`).join('') +
+    (legacy ? '<option value="legacy">历史标签（待重新分析）</option>' : '');
+  select.value = states.some(state => `action:${state}` === previous) || ['all', 'pending', 'failed'].includes(previous) || (legacy && previous === 'legacy') ? previous : 'all';
   el('actEnabledActions').textContent = getPromptStates().filter(state => state !== '无法判断').join(' / ');
 }
 
@@ -222,8 +229,9 @@ el('actDefaultExpansion').addEventListener('click', () => {
   previewExpansion();
 });
 async function startAnalysis(ids) {
-  watch(await api(`/api/actions/runs/${record.run_id}/analyze`, json({ ...config(), crop_ids: ids, force: !!el('actForce').checked })));
+  watch(await api(`/api/actions/runs/${record.run_id}/analyze`, json({ ...config(), crop_ids: ids, force: !!el('actForce').checked, experiment: el('actExperiment').value })));
 }
+el('actExperiment').addEventListener('change', () => { el('actForce').checked = true; });
 el('actAnalyze').addEventListener('click', () => command(() => startAnalysis([...selectedCrops])));
 el('actRetry').addEventListener('click', () => command(() => startAnalysis(record.crops.filter(item => item.status === 'failed').map(item => item.crop_id))));
 el('actCancel').addEventListener('click', async () => {

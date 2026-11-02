@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from action_recognition import jobs, prompts, store, vlm
+from action_recognition import decoding, jobs, prompts, store, vlm
 from action_recognition.regions import Expansion
 from project_paths import IMAGE_EXTENSIONS
 from . import common
@@ -38,6 +38,7 @@ class ModelRequest(BaseModel):
 class AnalyzeRequest(ModelRequest):
     crop_ids: list[str] = Field(default_factory=list, max_length=2000)
     force: bool = False
+    experiment: decoding.Experiment = 'A'
 
 
 def _call(function, *args):
@@ -125,7 +126,7 @@ def update_crop(run_id: str, crop_id: str, payload: RegionRequest):
 
 @router.post("/runs/{run_id}/analyze")
 def analyze(run_id: str, payload: AnalyzeRequest):
-    return _call(jobs.start_analysis, run_id, payload.crop_ids, payload.model, payload.quantization, payload.force)
+    return _call(jobs.start_analysis, run_id, payload.crop_ids, payload.model, payload.quantization, payload.force, payload.experiment)
 
 
 @router.get("/runs/{run_id}/files/{filename:path}")

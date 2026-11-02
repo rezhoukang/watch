@@ -14,6 +14,7 @@
 import math
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -25,6 +26,8 @@ from PIL import Image, ImageDraw, ImageFont
 import face_recognition
 import head_fusion
 import vision
+import aggregate_actions
+from action_recognition import jobs as action_jobs, vlm
 from project_paths import OUTPUT_DIR
 
 # 结果图目录：独立子目录，避免和「图片推理」的 data/results 混在一起
@@ -235,6 +238,11 @@ def render(image: np.ndarray, targets: list[dict]) -> Image.Image:
         states = list(dict.fromkeys(
             (pose.get("behavior") or {}).get("state") for pose in target.get("poses", [])))
         states = [state for state in states if state]
+        action = target.get('action') or {}
+        if action.get('state'):
+            states = [action['state']]
+        elif action.get('status') == 'failed':
+            states = ['动作分析失败']
         if states:
             label += " · " + "、".join(states)
         _label(draw, target["bbox"][0], target["bbox"][1], label, font, color)
@@ -243,10 +251,24 @@ def render(image: np.ndarray, targets: list[dict]) -> Image.Image:
 
 # ---------------------------------------------------------------- 主流程
 
-def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True) -> dict:
+def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True,
+                    multimodal: bool = False, progress: aggregate_actions.Progress | None = None) -> dict:
+    aggregate_actions.emit(progress, 'prepare', '准备图片与模型资源')
+    if pose and multimodal:
+        with action_jobs.mutation():
+            ready = vlm.status(vlm.DEFAULT_MODEL, '4bit')
+            if not ready['available']:
+                raise ValueError(ready['message'])
+            vlm.unload()
+            return _aggregate_image(src, face=face, pose=pose, save=save, multimodal=True, progress=progress)
+    return _aggregate_image(src, face=face, pose=pose, save=save, progress=progress)
+
+
+def _aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True,
+                     multimodal: bool = False, progress: aggregate_actions.Progress | None = None) -> dict:
     """一次跑完 目标检测 → 人脸识别 → 姿势检测绑定，返回结构化结果 + 带标注的结果图。
 
-    三步的配置全部锁死，只留「人脸识别」「姿势检测」两个开关：
+    固定模型参数；同时勾选「姿势检测」「多模态识别」时按 Head 裁剪改用 VLM 动作分析：
     目标检测就是「图片推理 → 目标检测」那一套；人脸识别固定用 FACE_CONFIDENCE /
     MATCH_THRESHOLD（生效值回报在 steps.face 里）；绑定规则固定（链式贪心 + 一一对应）。
     """
@@ -255,11 +277,14 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bo
     image = read_image(src)
     height, width = image.shape[:2]
     steps: dict[str, dict] = {}
+    aggregate_actions.emit(progress, 'prepare', '图片准备完成', 1, 1)
 
     # ---------- 1) 目标检测（固定：图片推理的目标检测）----------
     mark = time.perf_counter()
+    aggregate_actions.emit(progress, 'detect', '正在执行目标检测')
     detection = detect_targets(src)
     targets = detection["detections"]
+    aggregate_actions.emit(progress, 'detect', f'目标检测完成：{len(targets)} 个人头', 1, 1)
     steps["detect"] = {"enabled": True, "mode": detection["mode"], "weight": detection["weight"],
                        "imgsz": detection["imgsz"], "classes_used": detection["classes_used"],
                        "count": len(targets), "rule": detection["rule"], "fusion": detection["fusion"],
@@ -270,6 +295,7 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bo
     if not face:
         steps["face"] = {"enabled": False, "reason": "未勾选人脸识别"}
     else:
+        aggregate_actions.emit(progress, 'face', '正在执行人脸识别')
         if not face_recognition.list_entries():
             raise ValueError("人脸库为空：请先在「人脸检测」页导入学生花名册或添加人脸")
         mark = time.perf_counter()
@@ -301,13 +327,20 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bo
                          "rejected": recognized["rejected"], "reassigned": recognized["reassigned"],
                          "truncated": recognized["truncated"], "named_targets": named,
                          "elapsed_seconds": round(time.perf_counter()-mark, 3)}
+        aggregate_actions.emit(progress, 'face', '人脸识别完成', 1, 1)
 
     # ---------- 3) 姿势检测 + 绑定 ----------
     poses: list[dict] = []
+    steps['multimodal'] = {'enabled': False, 'reason': '需同时勾选姿势检测与多模态识别'}
     if not pose:
         steps["pose"] = {"enabled": False, "reason": "未勾选姿势检测"}
+    elif multimodal:
+        steps['pose'] = {'enabled': False, 'reason': '动作判断改用 VLM，不运行 Pose 规则'}
+        directory = RESULT_DIR / 'vlm' / uuid.uuid4().hex if save else None
+        steps['multimodal'] = aggregate_actions.analyze_heads(image, targets, directory, progress)
     else:
         mark = time.perf_counter()
+        aggregate_actions.emit(progress, 'pose', '正在执行 Pose 姿势检测与绑定')
         pose_result = detect_poses(src)
         poses = [{"person_index": index, "bbox": item["bbox"],
                   "confidence": item["confidence"], "keypoints": item["keypoints"],
@@ -331,14 +364,18 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bo
                          "unbound": len(poses)-len(pose_bindings), "rule": BIND_RULE,
                          "min_iou": MIN_BIND_IOU,
                          "elapsed_seconds": round(time.perf_counter()-mark, 3)}
+        aggregate_actions.emit(progress, 'pose', 'Pose 姿势检测与绑定完成', 1, 1)
 
     # ---------- 结果图（只画 head 框）----------
     out_name = ""
+    aggregate_actions.emit(progress, 'render', '正在生成聚合结果')
     if save:
         RESULT_DIR.mkdir(parents=True, exist_ok=True)
         suffix = src.suffix.lower() if src.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp", ".bmp") else ".jpg"
         out_name = f"{src.stem}_agg{suffix}"
         render(image, targets).save(RESULT_DIR/out_name)
+
+    aggregate_actions.emit(progress, 'render', '聚合结果生成完成', 1, 1)
 
     return {
         "source": src.name,
@@ -358,6 +395,8 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bo
             "unknown_faces": sum(1 for f in faces if f["status"] == "unknown"),
             "rejected_faces": sum(1 for f in faces if f["status"] == "rejected"),
             "poses": len(poses), "bound_poses": sum(1 for p in poses if p.get("target_index") is not None),
+            'vlm_actions': sum((t.get('action') or {}).get('status') == 'done' for t in targets),
+            'failed_actions': sum((t.get('action') or {}).get('status') == 'failed' for t in targets),
         },
         "elapsed_seconds": round(time.perf_counter()-started, 3),
         "generated_at": datetime.now(timezone.utc).isoformat(),

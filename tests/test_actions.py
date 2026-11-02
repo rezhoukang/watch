@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 import app
-from action_recognition import jobs, prompts, store, vlm
+from action_recognition import decoding, jobs, prompts, store, vlm
 from action_recognition.regions import Expansion, estimate, render_crop
 from web import common
 
@@ -40,12 +40,36 @@ class RegionTests(unittest.TestCase):
 
 
 class VlmResponseTests(unittest.TestCase):
-    def test_requested_five_actions_and_unknown_are_the_only_current_labels(self):
-        self.assertEqual(set(vlm.STATES), {'抬头', '低头', '低头玩手机', '低头看书', '睡觉', '无法判断'})
+    def test_generation_forwards_all_presets_and_preserves_failed_response_metrics(self):
+        import torch
+        model = Mock(device=torch.device('cpu'))
+        model.generate.return_value = torch.tensor([[1, 2, 3, 4, 5]])
+        processor = Mock()
+        processor.apply_chat_template.return_value = {'input_ids': torch.tensor([[1, 2, 3]])}
+        processor.batch_decode.return_value = ['{"state":"低头","evidence":"头朝下"}']
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'crop.png'
+            Image.new('RGB', (50, 50), 'white').save(path)
+            with patch.object(vlm, '_load', return_value=(model, processor)):
+                for experiment, beams, tokens in [('A', 1, 256), ('B', 2, 256), ('C', 3, 256), ('D', 1, 128)]:
+                    result = vlm.analyze(path, experiment=experiment)
+                    kwargs = model.generate.call_args.kwargs
+                    self.assertEqual((kwargs['num_beams'], kwargs['max_new_tokens'], kwargs['do_sample']), (beams, tokens, False))
+                    self.assertEqual(result['metrics']['generated_tokens'], 2)
+                    self.assertEqual(result['decoding']['experiment'], experiment)
+                processor.batch_decode.return_value = ['{"state":"低头","evidence":""}']
+                with self.assertRaises(vlm.ResponseError) as raised:
+                    vlm.analyze(path, experiment='D')
+                self.assertEqual(raised.exception.metrics['generated_tokens'], 2)
+                self.assertIn('evidence', raised.exception.raw_response)
+
+    def test_default_actions_and_unknown_are_the_only_current_labels(self):
+        self.assertEqual(set(vlm.STATES), {'抬头', '低头', '低头看手机', '低头看平板电脑', '写字', '低头看书', '睡觉', '无法判断'})
         for state in vlm.STATES:
             self.assertEqual(vlm.parse_response(json.dumps({'state': state, 'evidence': '可见姿态证据'}), vlm.STATES)['state'], state)
-        with self.assertRaises(ValueError):
-            vlm.parse_response(json.dumps({'state': '疑似阅读', 'evidence': '旧类别'}), vlm.STATES)
+        for old in ['疑似阅读', '看黑色块', '看黑色屏幕', '有平板电脑', '看平板电脑', '打哈欠']:
+            with self.assertRaises(ValueError):
+                vlm.parse_response(json.dumps({'state': old, 'evidence': '旧类别'}), vlm.STATES)
 
     def test_single_state_and_evidence_are_required(self):
         value = vlm.parse_response(json.dumps({'state': '低头', 'evidence': '头部向下', 'uncertainty': '手被遮挡'}), vlm.STATES)
@@ -151,6 +175,32 @@ class ActionApiTests(unittest.TestCase):
         self.assertEqual(response.json()['crops'][0]['region_bbox'], [40, 10, 60, 50])
         self.assertTrue(all(item['action'] is None for item in response.json()['crops']))
 
+    def test_experiments_invalidate_cache_forward_parameters_and_keep_history(self):
+        record = self.prepare(); run_id = record['run_id']; crop_id = record['crops'][0]['crop_id']
+        for experiment in ['A', 'B', 'C', 'D']:
+            job = self.analyze(run_id, crop_ids=[crop_id], experiment=experiment)
+            self.assertEqual(job['cached'], 0)
+            self.assertEqual(self.analyzer.call_args.args[-1], experiment)
+        saved = store.read(run_id)
+        self.assertEqual([row['decoding']['experiment'] for row in saved['analysis_sessions']], ['A', 'B', 'C', 'D'])
+        self.assertEqual(len({row['results'][0]['input_sha256'] for row in saved['analysis_sessions']}), 1)
+        self.assertEqual(saved['crops'][0]['action']['decoding']['max_new_tokens'], 128)
+        self.assertEqual(saved['analysis_sessions'][0]['results'][0]['action']['decoding']['max_new_tokens'], 256)
+        self.assertEqual(self.analyze(run_id, crop_ids=[crop_id], experiment='D')['cached'], 1)
+        self.assertEqual(self.analyzer.call_count, 4)
+        self.analyze(run_id, crop_ids=[crop_id], experiment='D', force=True)
+        self.assertEqual(self.analyzer.call_count, 5)
+
+    def test_experiment_failure_keeps_metrics_and_rejects_invalid_selection(self):
+        record = self.prepare(); run_id = record['run_id']
+        self.assertEqual(self.client.post(f'/api/actions/runs/{run_id}/analyze', json={'experiment': 'E'}).status_code, 422)
+        self.analyzer.side_effect = vlm.ResponseError('VLM 未返回有效 JSON', {'generated_tokens': 128}, 'unfinished')
+        job = self.analyze(run_id, experiment='D')
+        self.assertEqual(job['errors'], 2)
+        saved = store.read(run_id)['analysis_sessions'][0]
+        self.assertEqual(saved['decoding'], decoding.describe('D'))
+        self.assertTrue(all(item['metrics']['generated_tokens'] == 128 and item['raw_response'] == 'unfinished' for item in saved['results']))
+
     def test_region_must_include_its_head_and_paths_are_confined(self):
         record = self.prepare(); run_id = record['run_id']
         for box in ([0, 0, 10, 10], [0, 0, 0, 10], ['NaN', 0, 50, 50]):
@@ -199,20 +249,18 @@ class ActionApiTests(unittest.TestCase):
     def test_custom_action_profile_persists_and_preview_does_not_save(self):
         original = self.client.get('/api/actions/prompt').json()
         config = original['config']
-        yawn = next(item for item in config['actions'] if item['name'] == '打哈欠')
-        self.assertFalse(yawn['enabled'])
-        yawn['enabled'] = True
+        config['actions'].append({'name': '挥手', 'enabled': True, 'priority': 50, 'rule': '可见手部挥动姿态'})
         preview = self.client.post('/api/actions/prompt/preview', json=config)
         self.assertEqual(preview.status_code, 200, preview.text)
-        self.assertIn('打哈欠', preview.json()['states'])
-        self.assertNotIn('打哈欠', self.client.get('/api/actions/prompt').json()['states'])
+        self.assertIn('挥手', preview.json()['states'])
+        self.assertNotIn('挥手', self.client.get('/api/actions/prompt').json()['states'])
         saved = self.client.put('/api/actions/prompt', json=config)
         self.assertEqual(saved.status_code, 200, saved.text)
         self.assertEqual(self.client.get('/api/actions/prompt').json()['config_id'], saved.json()['config_id'])
         self.assertTrue((store.ROOT / 'prompt_config.json').is_file())
-        self.assertIn('打哈欠', saved.json()['compiled_prompt'])
-        result = vlm.parse_response(json.dumps({'state': '打哈欠', 'evidence': '目标嘴部明显张大'}), saved.json()['states'])
-        self.assertEqual(result['state'], '打哈欠')
+        self.assertIn('挥手', saved.json()['compiled_prompt'])
+        result = vlm.parse_response(json.dumps({'state': '挥手', 'evidence': '可见手部姿态'}), saved.json()['states'])
+        self.assertEqual(result['state'], '挥手')
 
     def test_profile_changes_invalidate_cache_without_erasing_old_results(self):
         record = self.prepare(); run_id = record['run_id']; crop_id = record['crops'][0]['crop_id']
@@ -230,7 +278,7 @@ class ActionApiTests(unittest.TestCase):
     def test_inflight_batch_uses_one_snapshot_when_configuration_is_saved(self):
         record = self.prepare(); run_id = record['run_id']
         before = prompts.load(); seen = []
-        def analyze(path, model, quantization, profile):
+        def analyze(path, model, quantization, profile, experiment):
             seen.append(prompts.identifier(profile))
             changed = prompts.defaults(); changed['instructions'] = '保存到下一次任务'
             prompts.save(changed)
