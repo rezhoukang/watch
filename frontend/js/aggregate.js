@@ -2,7 +2,7 @@ import { el, esc, api, showError } from './core.js?v=95';
 import { hideHoverPreview } from './preview.js?v=95';
 import { loadImageGallery } from './images.js?v=95';
 import { classColor } from './viewer.js?v=95';
-import { renderAggregateProgress, followAggregateJob } from './aggregate-progress.js?v=100';
+import { renderAggregateProgress, followAggregateJob } from './aggregate-progress.js?v=106';
 
 /* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
@@ -26,16 +26,12 @@ let AGG_BUSY = false;
  * 目标检测、人脸识别阈值、姿势配置与绑定规则全部锁在后端，前端不提交。
  */
 function readAggregateOptions() {
-  const pose = !!el('aggPose').checked;
-  return { face: !!el('aggFaceRecognition').checked, pose, multimodal: pose && !!el('aggMultimodal').checked };
+  return { face: !!el('aggFaceRecognition').checked, multimodal: !!el('aggMultimodal').checked };
 }
 
 function syncMultimodal() {
-  const pose = el('aggPose').checked, multimodal = el('aggMultimodal');
-  multimodal.disabled = !pose;
-  if (!pose) multimodal.checked = false;
+  const multimodal = el('aggMultimodal');
   el('aggMultimodalHint').hidden = !multimodal.checked;
-  el('aggPoseHint').hidden = !!multimodal.checked;
 }
 
 function hasAction(target) {
@@ -73,6 +69,7 @@ document.querySelectorAll('.subtab[data-agg]').forEach((tab) => {
 function stepLine(steps) {
   return Object.entries(STEP_LABELS).map(([key, label]) => {
     const step = (steps || {})[key];
+    if (key === 'pose' && !step?.enabled) return '';
     if (!step || !step.enabled) return `<span class="agg-step is-off">${esc(label)}：${esc(step?.reason || '未启用')}</span>`;
     const detail = key === 'detect' ? `${step.count} 个人头`
       : key === 'face' ? `检出 ${step.face_count} 张 · 识别 ${step.matched} · 库内 ${step.library_count} 人 · 阈值 ${step.threshold}`
@@ -294,7 +291,6 @@ async function loadAggregate() {
 }
 
 el('aggRefresh').addEventListener('click', loadAggregate);
-el('aggPose').addEventListener('change', syncMultimodal);
 el('aggMultimodal').addEventListener('change', syncMultimodal);
 syncMultimodal();
 

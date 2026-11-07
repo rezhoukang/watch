@@ -1,7 +1,7 @@
 import { el, esc, api } from './core.js?v=95';
 import { bindImageHover } from './preview.js?v=95';
-import { getPromptStates, initPromptEditor, loadActionPrompts } from './action-prompts.js?v=96';
-import { renderExperiments } from './action-experiments.js?v=97';
+import { getPromptStates, initPromptEditor, loadActionPrompts } from './action-prompts.js?v=105';
+import { renderExperiments } from './action-experiments.js?v=105';
 
 // Independent module: anonymous Head IDs, original-image crops, local VLM only.
 let images = [], record = null, activeCrop = '', activeJob = null, timer = null;
@@ -30,9 +30,11 @@ function sync() {
   el('actCancel').hidden = !activeJob || activeJob.kind === 'download';
   el('actSaveRegion').disabled = running || !current();
   el('actCropSelectAll').checked = count > 0 && selectedCrops.size === count;
+  el('actCropSelectVisible').disabled = running || !visibleCrops().length;
+  el('actTwoStage').disabled = running || !el('actHeadOnly').checked;
   for (const id of ['actModel', 'actQuantization', 'actDownload', 'actUnload', 'actRun', 'actSide', 'actTop',
     'actBelow', 'actSource', 'actX1', 'actY1', 'actX2', 'actY2', 'actUpload', 'actRefresh', 'actSelectAll',
-    'actCropSelectAll', 'actDraw', 'actResetRegion', 'actDefaultExpansion', 'actExperiment', 'actForce']) el(id).disabled = running;
+    'actCropSelectAll', 'actDraw', 'actResetRegion', 'actDefaultExpansion', 'actExperiment', 'actForce', 'actHeadOnly']) el(id).disabled = running;
   el('actImageGrid').querySelectorAll('input').forEach(input => { input.disabled = running; });
   el('actCropGrid').querySelectorAll('input, button').forEach(input => { input.disabled = running; });
 }
@@ -114,24 +116,38 @@ async function openRun(id) {
   el('actRun').value = id;
 }
 
+function matchesCropFilter(item) {
+  const filter = el('actFilter').value || 'all';
+  if (filter === 'legacy') return !!item.action?.state && !getPromptStates().includes(item.action.state);
+  return filter === 'all' || (filter.startsWith('action:') ? filter.slice(7) === item.action?.state : filter === item.status);
+}
+function visibleCrops() { return (record?.crops || []).filter(matchesCropFilter); }
+
 function renderCrops() {
   const grid = el('actCropGrid'); grid.innerHTML = '';
-  const items = record?.crops || [], filter = el('actFilter').value || 'all';
+  const items = record?.crops || [];
   const counts = {};
   for (const item of items) {
     const state = item.action?.state || (item.status === 'failed' ? '分析失败' : '待分析');
     counts[state] = (counts[state] || 0)+1;
-    if (filter === 'legacy') {
-      if (!item.action?.state || getPromptStates().includes(item.action.state)) continue;
-    } else if (filter !== 'all' && (filter.startsWith('action:') ? filter.slice(7) !== item.action?.state : filter !== item.status)) continue;
+    if (!matchesCropFilter(item)) continue;
     const card = document.createElement('article');
     card.className = `action-crop-card${item.crop_id === activeCrop ? ' is-active' : ''}`;
     card.innerHTML = `<div class="action-crop-title"><b>${esc(item.crop_id)}</b><input type="checkbox" aria-label="选择目标 ${esc(item.crop_id)}"></div>
-      <img src="${esc(fileUrl(item.marked_file, item.revision))}" alt="${esc(item.crop_id)} 目标裁剪" loading="lazy">
+      <img src="${esc(fileUrl(item.action?.input_file || item.marked_file, item.revision))}" alt="${esc(item.crop_id)} 目标裁剪" loading="lazy">
       <div class="action-crop-info"><span class="action-state${item.status === 'failed' ? ' is-failed' : state === '无法判断' ? ' is-uncertain' : ''}">${esc(state)}</span>
+      ${item.action?.two_stage ? '<p class="hint">两阶段策略一 · Head → 扩展 ROI</p>' : item.action?.head_only ? '<p class="hint">只测抬头低头 · Head ROI</p>' : ''}
+      ${item.action?.fallback ? '<p class="action-reason">规则兜底 · 非模型确认</p>' : ''}
       ${item.action?.state && !getPromptStates().includes(item.action.state) ? '<p class="hint">历史标签；重新分析后使用当前动作配置。</p>' : ''}
       <p class="action-evidence">${esc(item.action?.evidence || item.error || '检查范围后启动 VLM 分析')}</p>
       ${item.action?.uncertainty ? `<p class="action-reason">${esc(item.action.uncertainty)}</p>` : ''}
+      ${item.action?.provisional ? '<p class="hint">第一阶段结果 · 等待扩展 ROI 补充</p>' : ''}
+      ${item.error && item.action ? `<p class="action-reason">补充分析失败：${esc(item.error)}；保留 Head 初步结果。</p>` : ''}
+      ${item.action?.stages?.context ? `<details><summary>两阶段依据</summary>
+        <p class="hint">Head：${esc(item.action.stages.head.state)} · ${esc(item.action.stages.head.evidence)}</p>
+        <p class="hint">扩展 ROI：${esc(item.action.stages.context.state)} · ${esc(item.action.stages.context.evidence)}</p>
+        <p class="hint">最终来源：${esc(({head_confirmed:'保留 Head 结果',context_action:'具体动作覆盖',context_suspected:'扩展 ROI 补充疑似姿态',fallback:'规则兜底'})[item.action.decision] || item.action.decision)}</p>
+        <a href="${esc(fileUrl(item.action.stages.head.input_file, item.revision))}" target="_blank" rel="noopener">查看 Head 输入</a> · <a href="${esc(fileUrl(item.action.stages.context.input_file, item.revision))}" target="_blank" rel="noopener">查看扩展输入</a></details>` : ''}
       <p class="action-crop-source" title="${esc(item.source)}">${esc(item.source)}${item.elapsed_seconds != null ? ` · ${item.elapsed_seconds}s` : ''}</p>
       ${item.action?.decoding ? `<p class="hint">${esc(item.action.decoding.label)} · ${item.action.decoding.num_beams} 束 · 上限 ${item.action.decoding.max_new_tokens}</p>` : ''}
       <button class="btn small ghost" type="button">检查 / 调整区域</button></div>`;
@@ -139,11 +155,12 @@ function renderCrops() {
     checkbox.addEventListener('change', () => { if (checkbox.checked) selectedCrops.add(item.crop_id); else selectedCrops.delete(item.crop_id); sync(); });
     const select = () => { activeCrop = item.crop_id; renderCrops(); renderEditor(); sync(); };
     card.querySelector('button').addEventListener('click', select); card.querySelector('img').addEventListener('click', select);
-    bindImageHover(card.querySelector('img'), () => ({ src: fileUrl(item.marked_file, item.revision), name: `${item.crop_id} · ${state}`, enlarge: true }));
+    bindImageHover(card.querySelector('img'), () => ({ src: fileUrl(item.action?.input_file || item.marked_file, item.revision), name: `${item.crop_id} · ${state}`, enlarge: true }));
     grid.appendChild(card);
   }
   if (!grid.children.length) grid.innerHTML = `<div class="empty">${items.length ? '当前筛选下没有目标。' : '暂无裁剪，请先选择图片进行 Head 检测。'}</div>`;
   el('actCounts').textContent = Object.entries(counts).map(([name, count]) => `${name} ${count}`).join(' · ') || '暂无目标';
+  el('actCropSelectVisible').disabled = busy() || !visibleCrops().length;
 }
 
 function renderActionFilters() {
@@ -154,7 +171,7 @@ function renderActionFilters() {
     states.map(state => `<option value="action:${esc(state)}">${esc(state)}</option>`).join('') +
     (legacy ? '<option value="legacy">历史标签（待重新分析）</option>' : '');
   select.value = states.some(state => `action:${state}` === previous) || ['all', 'pending', 'failed'].includes(previous) || (legacy && previous === 'legacy') ? previous : 'all';
-  el('actEnabledActions').textContent = getPromptStates().filter(state => state !== '无法判断').join(' / ');
+  el('actEnabledActions').textContent = el('actTwoStage').checked ? '两阶段：Head 姿态 + 扩展 ROI 具体动作 / 疑似姿态' : el('actHeadOnly').checked ? '抬头 / 低头 / 无法判断 · 仅 Head ROI' : getPromptStates().filter(state => state !== '无法判断').join(' / ');
 }
 
 function editorBox() { return ['actX1', 'actY1', 'actX2', 'actY2'].map(id => Number(el(id).value)); }
@@ -190,7 +207,7 @@ async function poll() {
   polling = true;
   try {
     const job = await api(`/api/actions/jobs/${activeJob.job_id}`);
-    el('actProgress').innerHTML = `${esc(job.message)} · ${job.progress}/${job.total}${job.errors ? ` · ${job.errors} 项失败` : ''}${job.cached ? ` · 复用 ${job.cached} 项` : ''}<progress value="${job.progress}" max="${Math.max(1, job.total)}"></progress>`;
+    el('actProgress').innerHTML = `${esc(job.message)}${job.stage ? '' : ` · ${job.progress}/${job.total}`}${job.errors ? ` · ${job.errors} 项失败` : ''}${job.cached ? ` · 复用 ${job.cached} 项` : ''}<progress value="${job.progress}" max="${Math.max(1, job.total)}"></progress>`;
     if (job.run_id) await openRun(job.run_id);
     if (terminal.has(job.status)) {
       clearInterval(timer); timer = null; activeJob = null;
@@ -229,8 +246,21 @@ el('actDefaultExpansion').addEventListener('click', () => {
   previewExpansion();
 });
 async function startAnalysis(ids) {
-  watch(await api(`/api/actions/runs/${record.run_id}/analyze`, json({ ...config(), crop_ids: ids, force: !!el('actForce').checked, experiment: el('actExperiment').value })));
+  watch(await api(`/api/actions/runs/${record.run_id}/analyze`, json({ ...config(), crop_ids: ids, force: !!el('actForce').checked, experiment: el('actExperiment').value, head_only: el('actHeadOnly').checked, two_stage: el('actTwoStage').checked })));
 }
+el('actHeadOnly').addEventListener('change', () => {
+  el('actForce').checked = true;
+  el('actHeadOnlyHint').hidden = !el('actHeadOnly').checked;
+  if (!el('actHeadOnly').checked) el('actTwoStage').checked = false;
+  el('actTwoStageHint').hidden = !el('actTwoStage').checked;
+  renderActionFilters(); sync();
+});
+el('actTwoStage').addEventListener('change', () => {
+  el('actForce').checked = true;
+  el('actTwoStageHint').hidden = !el('actTwoStage').checked;
+  el('actHeadOnlyHint').hidden = el('actTwoStage').checked || !el('actHeadOnly').checked;
+  renderActionFilters();
+});
 el('actExperiment').addEventListener('change', () => { el('actForce').checked = true; });
 el('actAnalyze').addEventListener('click', () => command(() => startAnalysis([...selectedCrops])));
 el('actRetry').addEventListener('click', () => command(() => startAnalysis(record.crops.filter(item => item.status === 'failed').map(item => item.crop_id))));
@@ -252,6 +282,12 @@ el('actSelectAll').addEventListener('change', () => {
 });
 el('actCropSelectAll').addEventListener('change', () => {
   selectedCrops.clear(); if (el('actCropSelectAll').checked) record?.crops.forEach(item => selectedCrops.add(item.crop_id)); renderCrops(); sync();
+});
+el('actCropSelectVisible').addEventListener('click', () => {
+  if (busy()) return;
+  selectedCrops.clear();
+  visibleCrops().forEach(item => selectedCrops.add(item.crop_id));
+  renderCrops(); sync();
 });
 el('actFilter').addEventListener('change', renderCrops);
 for (const id of ['actSide', 'actTop', 'actBelow']) el(id).addEventListener('input', previewExpansion);

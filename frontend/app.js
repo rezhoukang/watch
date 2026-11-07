@@ -8,8 +8,8 @@ import { loadDatasets } from './js/training.js?v=95';
 import { loadAnnotateGrid } from './js/annotator.js?v=95';
 import { loadOutputs } from './js/outputs.js?v=95';
 import { loadHeadCuts } from './js/head-cuts.js?v=95';
-import { loadAggregate } from './js/aggregate.js?v=101';
-import { loadActions } from './js/actions.js?v=98';
+import { loadAggregate } from './js/aggregate.js?v=106';
+import { loadActions } from './js/actions.js?v=106';
 
 initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate, loadActions });
 loadEnv();

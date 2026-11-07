@@ -34,8 +34,10 @@ def start(src: Path, options: dict) -> dict:
     plan = ['prepare', 'detect']
     if options.get('face', True):
         plan.append('face')
-    if options.get('pose', True):
-        plan.append('multimodal' if options.get('multimodal') else 'pose')
+    if options.get('multimodal'):
+        plan.append('multimodal')
+    elif options.get('pose', True):
+        plan.append('pose')
     plan.append('render')
     with _lock:
         # Keep at most 20 completed jobs, including their structured results.

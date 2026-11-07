@@ -13,7 +13,7 @@ import aggregate
 import aggregate_actions
 import aggregate_jobs
 import app
-from action_recognition import jobs, prompts
+from action_recognition import jobs, prompts, head_only, two_stage, store
 from web import common
 
 
@@ -33,6 +33,7 @@ class AggregateVlmTests(unittest.TestCase):
             'classes_used': [], 'fusion': {}, 'rule': 'head rule'})
         self.pose = Mock(return_value={'detections': [], 'excluded_unknown': 0})
         for module, name, value in [
+            (store, 'ROOT', self.root / 'actions'),
             (common, 'UPLOAD_DIR', uploads), (common, '_require_head_detection', Mock()),
             (aggregate, 'RESULT_DIR', self.root / 'results'), (aggregate, 'detect_targets', self.detector),
             (aggregate, 'detect_poses', self.pose),
@@ -71,7 +72,7 @@ class AggregateVlmTests(unittest.TestCase):
         self.assertTrue(started.wait(3))
         job_id = response.json()['job_id']
         live = self.client.get('/api/aggregate/jobs/' + job_id).json()
-        self.assertEqual((live['stage'], live['current'], live['total']), ('multimodal', 0, 2))
+        self.assertEqual((live['stage'], live['current'], live['total']), ('multimodal', 0, 4))
         self.assertEqual(self.client.get('/api/aggregate/jobs/active').json()['job']['job_id'], job_id)
         self.assertEqual(self.client.post('/api/aggregate/jobs/class.png', json={}).status_code, 409)
         release.set()
@@ -97,7 +98,9 @@ class AggregateVlmTests(unittest.TestCase):
         steps = list(dict.fromkeys(event['stage'] for event in events))
         self.assertEqual(steps, ['prepare', 'detect', 'multimodal', 'render'])
         done = [event['current'] for event in events if event['stage'] == 'multimodal']
-        self.assertIn(1, done); self.assertEqual(done[-1], 2)
+        self.assertIn(1, done); self.assertEqual(done[-1], 4)
+        boundary = next(e for e in events if e.get('pass_name') == 'context')
+        self.assertTrue(all(t['action']['provisional'] for t in boundary['preview_targets']))
 
     def test_both_switches_use_head_crops_and_saved_prompt_instead_of_pose(self):
         before = prompts.load()
@@ -105,35 +108,40 @@ class AggregateVlmTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         record = response.json()
         self.pose.assert_not_called()
-        self.assertEqual(self.analyzer.call_count, 2)
+        self.assertEqual(self.analyzer.call_count, 4)
         self.assertEqual(record['summary']['vlm_actions'], 2)
         self.assertEqual(record['poses'], [])
         self.assertEqual(record['targets'][0]['action']['region_bbox'], [3, 10, 57, 56])
         self.assertEqual(record['targets'][1]['action']['state'], '低头')
-        self.assertEqual(self.analyzer.call_args.args[3], before)
+        self.assertEqual(self.analyzer.call_args.args[3], two_stage.context_profile(before))
+        self.assertEqual(self.analyzer.call_args_list[0].args[3], head_only.profile())
+        paths = [call.args[0].name for call in self.analyzer.call_args_list]
+        self.assertEqual(paths, ['HC0001_head.png', 'HC0002_head.png', 'HC0001_target.png', 'HC0002_target.png'])
         self.assertEqual(record['steps']['multimodal']['experiment'], 'A')
         self.assertTrue(list((self.root / 'results' / 'vlm').glob('*/record.json')))
         self.assertTrue(list((self.root / 'results' / 'vlm').glob('*/HC0001_target.png')))
 
-    def test_without_multimodal_original_pose_path_is_used(self):
+    def test_without_multimodal_pose_is_not_run_even_with_stale_flag(self):
         self.assertEqual(self.post(pose=True, multimodal=False).status_code, 200)
-        self.pose.assert_called_once()
+        self.pose.assert_not_called()
         self.analyzer.assert_not_called()
 
-    def test_multimodal_without_pose_does_not_run_either_action_path(self):
+    def test_multimodal_without_pose_runs_strategy_one(self):
         response = self.post(pose=False, multimodal=True)
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertFalse(response.json()['steps']['multimodal']['enabled'])
-        self.pose.assert_not_called(); self.analyzer.assert_not_called()
+        self.assertTrue(response.json()['steps']['multimodal']['enabled'])
+        self.assertTrue(response.json()['steps']['multimodal']['two_stage'])
+        self.pose.assert_not_called()
+        self.assertEqual(self.analyzer.call_count, 4)
 
     def test_failure_is_explicit_and_other_target_can_complete(self):
-        self.analyzer.side_effect = [ValueError('缺少可见证据'), {'state': '无法判断', 'evidence': '头部被遮挡'}]
+        self.analyzer.side_effect = [ValueError('缺少可见证据'), {'state': '无法判断', 'evidence': '头部被遮挡'}, {'state': '无法判断', 'evidence': '仍被遮挡'}]
         response = self.post(pose=True, multimodal=True)
         self.assertEqual(response.status_code, 200, response.text)
         record = response.json()
         self.assertEqual(record['summary']['failed_actions'], 1)
         self.assertEqual(record['targets'][0]['action']['status'], 'failed')
-        self.assertEqual(record['targets'][1]['action']['state'], '无法判断')
+        self.assertEqual(record['targets'][1]['action']['state'], '疑似低头')
         self.pose.assert_not_called()
 
     def test_model_unavailable_and_busy_fail_before_head_detection(self):

@@ -1,6 +1,12 @@
 import { el, esc, api } from './core.js?v=95';
 
 function renderAggregateProgress(job, filename) {
+  const counts = {};
+  for (const target of job.preview_targets || []) {
+    const state = target.action?.state;
+    if (state) counts[state] = (counts[state] || 0) + 1;
+  }
+  const preview = Object.entries(counts).map(([state, count]) => `${state} ${count}`).join(' · ');
   const stages = job.stages || [], stage = stages.find(item => item.key === job.stage);
   const percent = Math.max(0, Math.min(100, Number(job.percent) || 0));
   const known = typeof job.total === 'number';
@@ -11,6 +17,7 @@ function renderAggregateProgress(job, filename) {
   el('aggResult').innerHTML = `<div class="aggregate-progress" role="status" aria-live="polite">
     <b>${job.status === 'failed' ? '聚合失败 · ' : ''}${esc(stage?.label || '准备聚合任务')} · ${esc(job.message || '正在创建任务')}</b>
     <p class="hint">图片：${esc(filename)} · 已用时 ${seconds}s</p>
+    ${preview ? `<p class="hint">当前已出结果（补充识别完成前为初步结果）：${esc(preview)}</p>` : ''}
     <label>阶段进度 ${percent}%<progress aria-label="聚合阶段进度" max="100" value="${percent}"></progress></label>
     <p class="hint">按已完成阶段与当前阶段进度计算，不代表耗时比例。</p>
     <div class="agg-steps">${stages.map(item => `<span class="agg-step ${item.status === 'running' ? 'is-running' : item.status === 'failed' ? 'is-failed' : item.status === 'waiting' ? 'is-off' : ''}">${esc(item.label)} · ${esc(stageStatus[item.status] || item.status)}</span>`).join('')}</div>

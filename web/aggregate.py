@@ -13,15 +13,12 @@ router = APIRouter()
 
 
 class AggregateRequest(BaseModel):
-    """聚合开关，多模态只有在姿势检测同时启用时生效。
-
-    目标检测、人脸识别阈值、姿势配置、绑定规则全部锁死在 aggregate.py 里（
-    FACE_CONFIDENCE / MATCH_THRESHOLD / MIN_QUALITY_CONFIDENCE / MIN_FACE_PIXELS /
-    MIN_FACE_SHARPNESS、POSE_* 、MIN_BIND_IOU），前端不开放也不提交。
-    """
+    """仅保留人脸与多模态姿态开关，多模态固定采用两阶段策略一。"""
     face: bool = True
-    pose: bool = True
     multimodal: bool = False
+
+    def options(self):
+        return {**self.model_dump(), 'pose': False}
 
 
 @router.post('/api/aggregate/jobs/{filename}', summary='启动带阶段进度的聚合推理')
@@ -31,7 +28,7 @@ def start_aggregate_job(filename: str, payload: AggregateRequest):
     if src.suffix.lower() not in IMAGE_EXTENSIONS:
         raise HTTPException(status_code=400, detail='只能聚合待推理列表中的图片')
     try:
-        return aggregate_jobs.start(src, payload.model_dump())
+        return aggregate_jobs.start(src, payload.options())
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -55,10 +52,9 @@ def aggregate_image(filename: str, payload: AggregateRequest) -> dict:
     src = common._safe_file(common.UPLOAD_DIR, filename)
     if src.suffix.lower() not in IMAGE_EXTENSIONS:
         raise HTTPException(status_code=400, detail='只能聚合待推理列表中的图片')
-    common.logger.info('开始聚合：%s（人脸=%s, 姿势=%s）', filename, payload.face, payload.pose)
+    common.logger.info('开始聚合：%s（人脸=%s, 多模态=%s）', filename, payload.face, payload.multimodal)
     try:
-        result = aggregate.aggregate_image(src, face=payload.face, pose=payload.pose,
-                                           multimodal=payload.multimodal)
+        result = aggregate.aggregate_image(src, **payload.options())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

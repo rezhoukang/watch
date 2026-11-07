@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 import torch
 from fastapi.testclient import TestClient
+from httpx import Response
 from PIL import Image
 from ultralytics.engine.results import Results
 
@@ -230,6 +231,11 @@ class AggregateApiTests(unittest.TestCase):
     def post(self, **overrides):
         return self.client.post('/api/aggregate/image/people.png', json=overrides)
 
+    def legacy_pose_response(self, **options):
+        """Keep testing the retained legacy engine directly; new HTTP UI has no Pose option."""
+        result = aggregate.aggregate_image(common.UPLOAD_DIR / 'people.png', face=options.get('face', True), pose=True)
+        return Response(200, json=result)
+
     def test_target_detection_is_locked_to_image_inference_settings(self):
         record = self.post().json()
         # 前端不再传目标检测参数：后端固定 medium.pt 0.45 基准 + RT-DETRv4 0.25 补齐，IoU 规则锁死
@@ -246,7 +252,7 @@ class AggregateApiTests(unittest.TestCase):
         self.assertEqual(record['count'], 3)
 
     def test_names_are_attached_to_the_head_and_poses_are_bound(self):
-        response = self.post()
+        response = self.legacy_pose_response()
         self.assertEqual(response.status_code, 200, response.text)
         record = response.json()
         self.assertEqual(record['count'], 3)
@@ -290,14 +296,14 @@ class AggregateApiTests(unittest.TestCase):
         self.assertEqual(self.recognition.call_count, 0)
 
     def test_pose_keypoints_come_from_the_pose_model(self):
-        record = self.post().json()
+        record = self.legacy_pose_response().json()
         self.assertEqual(self.pose_model.predict.call_count, 1)
         self.assertEqual(self.pose_model.predict.call_args.kwargs['conf'], .6)
         self.assertEqual(len(record['poses'][0]['keypoints']), 17)
 
     def test_pose_settings_are_locked_and_stale_overrides_are_ignored(self):
         with patch.object(vision, 'detect_image', wraps=vision.detect_image) as detect:
-            response = self.post(face=False, pose_confidence=.01, pose_weights='other.pt',
+            response = self.legacy_pose_response(face=False, pose_confidence=.01, pose_weights='other.pt',
                                  imgsz=1280, head_down_r_threshold=.5,
                                  head_up_r_threshold=.6, pose_roi=False, roi_confidence=.9)
         self.assertEqual(response.status_code, 200, response.text)
@@ -323,7 +329,7 @@ class AggregateApiTests(unittest.TestCase):
         result.keypoints.data[1, 0, 2] = 0
         self.pose_model.predict.return_value = [result]
         with patch.object(pose_roi, '_get_model') as objects:
-            response = self.post(face=False)
+            response = self.legacy_pose_response(face=False)
         self.assertEqual(response.status_code, 200, response.text)
         record = response.json()
         self.assertEqual(record['poses'], [])
@@ -343,7 +349,7 @@ class AggregateApiTests(unittest.TestCase):
             boxes=torch.tensor([[20, 50, 35, 65, .04, 0], [120, 50, 140, 70, .04, 1]],
                                dtype=torch.float32))]
         with patch.object(pose_roi, '_get_model', return_value=object_model):
-            response = self.post(face=False)
+            response = self.legacy_pose_response(face=False)
         self.assertEqual(response.status_code, 200, response.text)
         record = response.json()
         self.assertEqual([p['behavior']['state'] for p in record['poses']], ['疑似看手机', '疑似阅读'])
@@ -359,7 +365,7 @@ class AggregateApiTests(unittest.TestCase):
                       boxes=torch.tensor([[600, 380, 639, 399, .9, 0]], dtype=torch.float32),
                       keypoints=torch.tensor([keypoints_of()], dtype=torch.float32))
         self.pose_model.predict.return_value = [far]
-        record = self.post().json()
+        record = self.legacy_pose_response().json()
         self.assertEqual(record['unbound_poses'], [1])
         self.assertEqual(record['steps']['pose']['bound'], 0)
 
@@ -371,7 +377,7 @@ class AggregateApiTests(unittest.TestCase):
         self.assertEqual(record['summary']['named_targets'], 0)
 
     def test_binding_rule_is_fixed_and_reported(self):
-        record = self.post().json()
+        record = self.legacy_pose_response().json()
         self.assertEqual(record['steps']['pose']['min_iou'], 0)
         self.assertIn('链式贪心', record['bind']['rule'])
         self.assertIn('IoU > 0', record['bind']['rule'])
@@ -409,7 +415,7 @@ class AggregateApiTests(unittest.TestCase):
         # 绑定规则已固定：前端误传 bind / bind_iou 不再是一个开关，只是被忽略
         record = self.post(bind='bogus', bind_iou=1.5, weights='yolov8m.pt').json()
         self.assertIn('链式贪心', record['bind']['rule'])
-        self.assertEqual(record['steps']['pose']['min_iou'], 0)
+        self.assertFalse(record['steps']['pose']['enabled'])
 
     def test_out_of_range_or_unknown_fields_do_not_break_the_run(self):
         # 阈值参数已锁死：多传/乱传一律忽略，不会 422，也不会改变生效值

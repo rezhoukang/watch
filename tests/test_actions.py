@@ -148,6 +148,176 @@ class ActionApiTests(unittest.TestCase):
         self.assertIn('no-store', raw.headers['cache-control'])
         self.assertEqual(self.client.get('/api/actions/runs').json()['runs'][0]['crop_count'], 2)
 
+    def test_head_only_uses_original_head_pixels_and_separate_cache(self):
+        record = self.prepare()
+        run_id = record['run_id']
+        item = record['crops'][0]
+        original_region = item['region_bbox'][:]
+        before_profile = prompts.load()
+        self.analyze(run_id, crop_ids=[item['crop_id']])
+        full_key = store.read(run_id)['crops'][0]['analysis_key']
+        self.analyze(run_id, crop_ids=[item['crop_id']], head_only=True)
+        path, _, _, profile, _ = self.analyzer.call_args.args
+        with Image.open(path) as image:
+            self.assertEqual(image.size, (20, 20))
+            self.assertEqual(image.getpixel((0, 0)), (197, 213, 229))
+        self.assertEqual(prompts.states(profile), ['抬头', '低头', '无法判断'])
+        compiled = prompts.compile_prompt(profile)
+        self.assertIn('动作配置 JSON', compiled)
+        self.assertIn('缺少桌面、手部和身体属于本模式正常裁剪', compiled)
+        self.assertNotIn('head_only_short', profile)
+        self.assertEqual(prompts.load(), before_profile)
+        saved = store.read(run_id)
+        head_item = saved['crops'][0]
+        self.assertTrue(head_item['action']['head_only'])
+        self.assertTrue(head_item['action']['input_file'].endswith('_head.png'))
+        self.assertEqual(head_item['region_bbox'], original_region)
+        self.assertNotEqual(head_item['analysis_key'], full_key)
+        self.assertTrue(saved['analysis_sessions'][-1]['head_only'])
+        self.assertEqual(saved['analysis_sessions'][-1]['results'][0]['region_bbox'], item['head_bbox'])
+        calls = self.analyzer.call_count
+        job = self.analyze(run_id, crop_ids=[item['crop_id']], head_only=True)
+        self.assertEqual(job['cached'], 1)
+        self.assertEqual(self.analyzer.call_count, calls)
+        self.analyze(run_id, crop_ids=[item['crop_id']], head_only=False)
+        self.assertEqual(self.analyzer.call_count, calls+1)
+        self.assertFalse(store.read(run_id)['crops'][0]['action']['head_only'])
+
+    def test_head_prompt_profile_is_editable_persistent_and_independent(self):
+        standard = self.client.get('/api/actions/prompt').json()['config']
+        head = self.client.get('/api/actions/prompt?mode=head').json()['config']
+        self.assertEqual({a['name'] for a in head['actions']}, {'抬头', '低头'})
+        head['instructions'] = '独立头部规则'
+        head['actions'][0]['rule'] = '面部朝前或上方'
+        preview = self.client.post('/api/actions/prompt/preview?mode=head', json=head)
+        self.assertEqual(preview.status_code, 200)
+        self.assertIn('独立头部规则', preview.json()['compiled_prompt'])
+        self.assertNotEqual(self.client.get('/api/actions/prompt?mode=head').json()['config'], head)
+        saved = self.client.put('/api/actions/prompt?mode=head', json=head)
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(self.client.get('/api/actions/prompt').json()['config'], standard)
+        standard['instructions'] = '只修改完整动作'
+        self.client.put('/api/actions/prompt', json=standard)
+        self.assertEqual(self.client.get('/api/actions/prompt?mode=head').json()['config'], head)
+        self.assertTrue((store.ROOT / 'head_prompt_config.json').is_file())
+        record = self.prepare()
+        self.analyze(record['run_id'], crop_ids=[record['crops'][0]['crop_id']], head_only=True)
+        self.assertEqual(self.analyzer.call_args.args[3], head)
+        head['actions'].pop()
+        self.assertEqual(self.client.put('/api/actions/prompt?mode=head', json=head).status_code, 400)
+
+    def test_two_stage_precedence_fallback_inputs_metrics_and_cache(self):
+        record = self.prepare()
+        run_id = record['run_id']
+        crop_id = record['crops'][0]['crop_id']
+        cases = [
+            ('抬头', '疑似低头', '抬头', 'head_confirmed'),
+            ('低头', '疑似抬头', '低头', 'head_confirmed'),
+            ('抬头', '无法判断', '抬头', 'head_confirmed'),
+            ('无法判断', '疑似抬头', '疑似抬头', 'context_suspected'),
+            ('无法判断', '疑似低头', '疑似低头', 'context_suspected'),
+            ('无法判断', '无法判断', '疑似低头', 'fallback'),
+            ('抬头', '写字', '写字', 'context_action'),
+            ('低头', '低头看手机', '低头看手机', 'context_action'),
+            ('无法判断', '睡觉', '睡觉', 'context_action'),
+        ]
+        for head, context, expected, decision in cases:
+            with self.subTest(head=head, context=context):
+                self.analyzer.side_effect = [
+                    {'state': head, 'evidence': 'Head 证据', 'uncertainty': '', 'metrics': {'generation_seconds': 1, 'generated_tokens': 10, 'peak_allocated_mib': 100}},
+                    {'state': context, 'evidence': '扩展证据', 'uncertainty': '', 'metrics': {'generation_seconds': 2, 'generated_tokens': 20, 'peak_allocated_mib': 120}},
+                ]
+                job = self.analyze(run_id, crop_ids=[crop_id], head_only=True, two_stage=True, force=True)
+                self.assertEqual(job['status'], 'completed')
+                saved = store.read(run_id)
+                action = saved['crops'][0]['action']
+                self.assertEqual((action['state'], action['decision']), (expected, decision))
+                self.assertEqual(action['fallback'], decision == 'fallback')
+                self.assertEqual(action['metrics']['generation_seconds'], 3)
+                self.assertEqual(action['metrics']['generated_tokens'], 30)
+                self.assertEqual(action['metrics']['peak_allocated_mib'], 120)
+                head_call, context_call = self.analyzer.call_args_list[-2:]
+                with Image.open(head_call.args[0]) as image:
+                    self.assertEqual(image.size, (20, 20))
+                with Image.open(context_call.args[0]) as image:
+                    self.assertEqual(image.size, (54, 46))
+                profile = context_call.args[3]
+                self.assertIn('疑似抬头', prompts.states(profile))
+                self.assertNotIn('抬头', prompts.states(profile))
+                self.assertEqual(action['stages']['head']['state'], head)
+                self.assertEqual(action['stages']['context']['state'], context)
+                self.assertTrue(saved['analysis_sessions'][-1]['two_stage'])
+        calls = self.analyzer.call_count
+        self.analyzer.side_effect = None
+        job = self.analyze(run_id, crop_ids=[crop_id], head_only=True, two_stage=True)
+        self.assertEqual(job['cached'], 1)
+        self.assertEqual(self.analyzer.call_count, calls)
+        regular = prompts.load()
+        regular['instructions'] += '修改第二阶段'
+        prompts.save(regular)
+        self.analyzer.side_effect = [
+            {'state': '无法判断', 'evidence': '遮挡'},
+            {'state': '无法判断', 'evidence': '遮挡'}]
+        job = self.analyze(run_id, crop_ids=[crop_id], head_only=True, two_stage=True)
+        self.assertEqual(job['cached'], 0)
+        self.assertEqual(self.analyzer.call_count, calls+2)
+
+    def test_two_stage_error_is_not_suspected_fallback_and_requires_head_mode(self):
+        record = self.prepare()
+        run_id = record['run_id']
+        crop_id = record['crops'][0]['crop_id']
+        bad = self.client.post(f'/api/actions/runs/{run_id}/analyze', json={'two_stage': True})
+        self.assertEqual(bad.status_code, 400)
+        self.analyzer.side_effect = [{'state': '无法判断', 'evidence': '遮挡'}, ValueError('JSON 解析失败')]
+        self.analyze(run_id, crop_ids=[crop_id], head_only=True, two_stage=True)
+        item = store.read(run_id)['crops'][0]
+        self.assertEqual(item['status'], 'failed')
+        self.assertTrue(item['action']['provisional'])
+        self.assertEqual(item['action']['state'], '无法判断')
+        self.assertIn('JSON 解析失败', item['error'])
+        session = store.read(run_id)['analysis_sessions'][-1]
+        self.assertEqual(session['results'][0]['stages']['head']['state'], '无法判断')
+
+    def test_two_stage_cancellation_after_head_does_not_call_context(self):
+        record = self.prepare()
+        def stop_after_head(*args):
+            for event in jobs._events.values():
+                event.set()
+            return {'state': '抬头', 'evidence': '面向前方'}
+        self.analyzer.side_effect = stop_after_head
+        job = self.analyze(record['run_id'], crop_ids=[record['crops'][0]['crop_id']], head_only=True, two_stage=True)
+        self.assertEqual(job['status'], 'cancelled')
+        self.assertEqual(self.analyzer.call_count, 1)
+        saved = store.read(record['run_id'])
+        self.assertTrue(saved['crops'][0]['action']['provisional'])
+        self.assertEqual(saved['analysis_sessions'][-1]['results'][0]['stages']['head']['state'], '抬头')
+
+    def test_two_stage_all_heads_are_published_before_any_context(self):
+        record = self.prepare()
+        entered_context, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        paths = []
+        def analyze(path, *args):
+            paths.append(path.name)
+            if path.name.endswith('_head.png'):
+                return {'state': '低头', 'evidence': '头部向下'}
+            entered_context.set()
+            release.wait(3)
+            return {'state': '写字', 'evidence': '纸面持笔'}
+        self.analyzer.side_effect = analyze
+        response = self.client.post(f"/api/actions/runs/{record['run_id']}/analyze", json={'head_only': True, 'two_stage': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(entered_context.wait(3))
+        live = self.client.get(f"/api/actions/runs/{record['run_id']}").json()
+        self.assertTrue(all(c['status'] == 'pending_context' for c in live['crops']))
+        self.assertTrue(all(c['action']['state'] == '低头' and c['action']['provisional'] for c in live['crops']))
+        job = jobs.get(response.json()['job_id'])
+        self.assertEqual(job['stage'], 'context')
+        self.assertEqual(paths[:3], ['HC001-001_head.png', 'HC001-002_head.png', 'HC001-001_target.png'])
+        release.set()
+        self.wait(response.json()['job_id'])
+        self.assertTrue(all(c['action']['state'] == '写字' for c in store.read(record['run_id'])['crops']))
+
     def test_selected_analysis_cache_and_manual_edit_invalidation(self):
         record = self.prepare(); run_id = record['run_id']; crop_id = record['crops'][0]['crop_id']
         self.analyze(run_id, crop_ids=[crop_id])

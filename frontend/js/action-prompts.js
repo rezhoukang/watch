@@ -1,11 +1,14 @@
 import { el, esc, api } from './core.js?v=95';
 
 let saved = null, defaults = null, jsonDirty = false, onSaved = () => {};
+let mode = 'actions';
+const savedProfiles = {}, drafts = {};
+const endpoint = (suffix = '') => `/api/actions/prompt${suffix}?mode=${mode}`;
 const payload = config => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
 const message = (text, failed = false) => { el('actPromptStatus').textContent = text; el('actPromptStatus').style.color = failed ? '#b3261e' : '#527082'; };
 
 function getPromptStates() {
-  return [...(saved?.actions || []).filter(item => item.enabled).map(item => item.name), '无法判断'];
+  return [...new Set([...(savedProfiles.actions?.actions || []).filter(item => item.enabled).map(item => item.name), '抬头', '低头', '疑似抬头', '疑似低头', '无法判断'])];
 }
 
 function readForm() {
@@ -34,6 +37,11 @@ function addRow(item) {
   row.querySelector('[data-cfg="name"]').value = item.name;
   row.querySelector('[data-cfg="priority"]').value = item.priority;
   row.querySelector('[data-cfg="rule"]').value = item.rule;
+  if (mode === 'head') {
+    row.querySelector('[data-cfg="name"]').readOnly = true;
+    row.querySelector('[data-cfg="enabled"]').disabled = true;
+    row.querySelector('button').disabled = true;
+  }
   row.querySelectorAll('input, textarea').forEach(input => input.addEventListener('input', dirty));
   row.querySelector('button').addEventListener('click', () => { row.remove(); dirty(); });
   el('actPromptRules').appendChild(row);
@@ -63,24 +71,42 @@ function draft() {
     if (typeof item.enabled !== 'boolean') throw new Error('enabled 必须为 true 或 false');
   }
   if (!config.actions.some(item => item.enabled)) throw new Error('至少启用一个动作');
+  if (mode === 'head' && (config.actions.length !== 2 || !['抬头', '低头'].every(name => config.actions.some(a => a.name === name && a.enabled)))) throw new Error('Head 模式固定启用抬头、低头，请编辑说明、规则和优先级');
   return config;
 }
 
 async function loadActionPrompts(force = false) {
   if (saved && !force) return saved;
-  const data = await api('/api/actions/prompt');
+  const data = await api(endpoint());
   saved = data.config; defaults = data.defaults;
+  savedProfiles[mode] = saved;
+  el('actPromptAdd').disabled = mode === 'head';
   renderForm(saved); el('actPromptPreview').value = data.compiled_prompt;
   message(`已加载配置 ${data.config_id.slice(0, 8)} · ${data.states.length-1} 个启用动作 · 无法判断始终保留`);
   onSaved(); return saved;
 }
 
 async function operation(work) {
+  el('actPromptMode').disabled = true;
   try { await work(); } catch (err) { message(err.message || String(err), true); }
+  finally { el('actPromptMode').disabled = false; }
 }
 
 function initPromptEditor(callback) {
   onSaved = callback;
+  el('actPromptMode').addEventListener('change', () => operation(async () => {
+    drafts[mode] = { config: readForm(), json: el('actPromptJson').value, jsonDirty };
+    const previous = mode;
+    mode = el('actPromptMode').value;
+    try { await loadActionPrompts(true); }
+    catch (error) { mode = previous; el('actPromptMode').value = previous; throw error; }
+    if (drafts[mode]) {
+      renderForm(drafts[mode].config);
+      el('actPromptJson').value = drafts[mode].json;
+      jsonDirty = drafts[mode].jsonDirty;
+      message('已切换配置，保留该模式的编辑内容；点击保存后用于下一次分析。');
+    }
+  }));
   el('actPromptInstructions').addEventListener('input', dirty);
   el('actPromptJson').addEventListener('input', () => { jsonDirty = true; message('JSON 已修改，保存配置或应用到表单后生效。'); });
   el('actPromptApplyJson').addEventListener('click', () => operation(async () => { const config = draft(); renderForm(config); dirty(); }));
@@ -94,14 +120,16 @@ function initPromptEditor(callback) {
   }));
   el('actPromptSave').addEventListener('click', () => operation(async () => {
     const config = draft();
-    const data = await api('/api/actions/prompt', { ...payload(config), method: 'PUT' });
+    const data = await api(endpoint(), { ...payload(config), method: 'PUT' });
     saved = data.config; defaults = data.defaults; renderForm(saved);
+    savedProfiles[mode] = saved;
+    delete drafts[mode];
     el('actPromptPreview').value = data.compiled_prompt;
     message(`已保存配置 ${data.config_id.slice(0, 8)} · ${data.states.length-1} 个启用动作；下一次分析使用新规则。`);
     onSaved();
   }));
   el('actPromptBuild').addEventListener('click', () => operation(async () => {
-    const data = await api('/api/actions/prompt/preview', payload(draft()));
+    const data = await api(endpoint('/preview'), payload(draft()));
     el('actPromptPreview').value = data.compiled_prompt;
     message('已根据当前编辑内容生成预览；尚未保存的配置不会用于推理。');
   }));

@@ -10,7 +10,7 @@ from pathlib import Path
 import head_fusion
 import vision
 
-from . import decoding, prompts, store, vlm
+from . import decoding, head_only as head_mode, prompts, store, two_stage, vlm
 from .regions import Expansion
 
 JOBS: dict[str, dict] = {}
@@ -123,10 +123,12 @@ def start_prepare(paths: list[Path], expansion: Expansion) -> dict:
         raise
 
 
-def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: str, force: bool, experiment: str = 'A') -> dict:
+def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: str, force: bool, experiment: str = 'A', head_only: bool = False, two_stage_enabled: bool = False) -> dict:
     if not _worker.acquire(blocking=False):
         raise RuntimeError("已有动作识别任务正在运行")
     try:
+        if two_stage_enabled and not head_only:
+            raise ValueError('两阶段策略需同时启用只测抬头低头')
         record = store.read(run_id)
         ids = list(dict.fromkeys(crop_ids)) if crop_ids else [item["crop_id"] for item in record["crops"]]
         if not ids:
@@ -134,6 +136,9 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
         items = [store.find_crop(record, crop_id) for crop_id in ids]
         # A running batch keeps one immutable profile even if the user saves new rules.
         profile = prompts.load()
+        context = two_stage.context_profile(profile) if two_stage_enabled else None
+        if head_only:
+            profile = head_mode.profile(profile)
         profile_id = prompts.identifier(profile)
         decode = decoding.describe(experiment)
         ready = vlm.status(model, quantization)
@@ -145,10 +150,18 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
                 "config": profile, "compiled_prompt": prompts.compile_prompt(profile),
                 "prompt_version": prompts.VERSION}
             record["last_prompt_config_id"] = profile_id
+            if context is not None:
+                context_id = prompts.identifier(context)
+                record['prompt_profiles'][context_id] = {
+                    'config': context, 'compiled_prompt': prompts.compile_prompt(context),
+                    'prompt_version': prompts.VERSION}
             store.write(record)
             session = {'session_id': job_id, 'started_at': store.now(), 'status': 'running',
                        'decoding': decode, 'model': vlm.MODELS[model], 'quantization': quantization,
-                       'prompt_config_id': profile_id, 'force': force, 'total': len(items), 'results': []}
+                       'prompt_config_id': profile_id, 'head_only': head_only,
+                       'two_stage': two_stage_enabled, 'context_profile': context,
+                       'context_prompt_config_id': prompts.identifier(context) if context is not None else None,
+                       'force': force, 'total': len(items), 'results': []}
             record.setdefault('analysis_sessions', []).append(session)
             store.write(record)
             session_started = time.perf_counter()
@@ -172,6 +185,9 @@ def start_analysis(run_id: str, crop_ids: list[str], model: str, quantization: s
 def _analyze_items(job_id, event, record, items, model, quantization, force, profile, profile_id, experiment, session):
     # Free Head detector caches before loading the VLM on a 12 GB GPU.
     vision.clear_model_cache()
+    if session.get('two_stage'):
+        from . import batch_analysis
+        return batch_analysis.run(job_id, event, record, items, model, quantization, force, profile, experiment, session)
     for index, item in enumerate(items, 1):
         if event.is_set():
             break
@@ -181,14 +197,20 @@ def _analyze_items(job_id, event, record, items, model, quantization, force, pro
         measurement = {'crop_id': item['crop_id'], 'source': item['source'],
                        'region_bbox': list(item['region_bbox']), 'revision': item['revision']}
         try:
+            input_file = item['marked_file']
+            if session.get('head_only'):
+                path, input_file = head_mode.input_file(record, item)
+                measurement['region_bbox'] = list(item['head_bbox'])
+            measurement['head_only'] = bool(session.get('head_only'))
             measurement['input_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
             key = vlm.cache_key(path, model, quantization, profile, experiment)
+            measurement['two_stage'] = bool(session.get('two_stage'))
             if not force and item.get("analysis_key") == key and item.get("status") == "done":
                 update(job_id, cached=get(job_id)["cached"]+1)
                 measurement['cached'] = True
             else:
                 result = vlm.analyze(path, model, quantization, profile, experiment)
-                item.update({"action": {**result, "decoding": decoding.describe(experiment), "analyzed_at": store.now(), "prompt_config_id": profile_id}, "status": "done",
+                item.update({"action": {**result, "two_stage": bool(session.get('two_stage')), "head_only": bool(session.get('head_only')), "input_file": input_file, "decoding": decoding.describe(experiment), "analyzed_at": store.now(), "prompt_config_id": profile_id}, "status": "done",
                              "analysis_key": key, "elapsed_seconds": round(time.perf_counter()-started, 2)})
                 item.pop("error", None)
             measurement.update(status='done', action=copy.deepcopy(item['action']))
@@ -197,6 +219,7 @@ def _analyze_items(job_id, event, record, items, model, quantization, force, pro
             item['elapsed_seconds'] = round(time.perf_counter()-started, 2)
             update(job_id, errors=get(job_id)["errors"]+1)
             measurement.update(status='failed', error=str(error),
+                               stages=getattr(error, 'stages', None),
                                metrics=getattr(error, 'metrics', None),
                                raw_response=getattr(error, 'raw_response', None))
             # A failed model load / CUDA OOM is shared by every target; don't repeat it hundreds of times.

@@ -21,7 +21,7 @@ function renderExperiments(record) {
     const cached = results.filter(item => item.cached).length;
     const statuses = { completed: '已完成', cancelled: '已取消', failed: '失败', running: '运行中' };
     return `<details class="action-experiment-entry"><summary>${esc(session.decoding.label)} · ${esc(new Date(session.started_at).toLocaleString())} · ${esc(statuses[session.status] || session.status)} · 已处理 ${results.length}/${session.total} · 失败 ${failed} · 缓存 ${cached}</summary>
-      <p class="hint">${esc(session.model)} · ${esc(session.quantization)} · 提示词 ${esc(session.prompt_config_id.slice(0, 8))} · ${session.decoding.num_beams} 束 · 上限 ${session.decoding.max_new_tokens} · 关闭采样</p>
+      <p class="hint">${session.two_stage ? '两阶段策略一 · 资源指标为两次调用合计 · ' : ''}${esc(session.model)} · ${esc(session.quantization)} · 提示词 ${esc(session.prompt_config_id.slice(0, 8))}${session.context_prompt_config_id ? ` / 扩展 ${esc(session.context_prompt_config_id.slice(0, 8))}` : ''} · ${session.decoding.num_beams} 束 · 上限 ${session.decoding.max_new_tokens} · 关闭采样</p>
       <p class="hint">总耗时 ${format(session.elapsed_seconds, 's')} · 生成中位数 ${format(percentile(times, .5), 's')} · P95 ${format(percentile(times, .95), 's')} · 分配显存峰值 ${format(peaks.length ? Math.max(...peaks) : NaN, ' MiB')} · 响应校验失败 ${results.filter(item => item.raw_response != null).length}</p>
       <table><thead><tr><th>目标 / 输入摘要</th><th>结果与可见证据</th><th>生成耗时 / 输出 Token</th></tr></thead><tbody>${results.map(item => {
         const metric = item.action?.metrics || item.metrics || {};

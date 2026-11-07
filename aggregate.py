@@ -254,7 +254,7 @@ def render(image: np.ndarray, targets: list[dict]) -> Image.Image:
 def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True,
                     multimodal: bool = False, progress: aggregate_actions.Progress | None = None) -> dict:
     aggregate_actions.emit(progress, 'prepare', '准备图片与模型资源')
-    if pose and multimodal:
+    if multimodal:
         with action_jobs.mutation():
             ready = vlm.status(vlm.DEFAULT_MODEL, '4bit')
             if not ready['available']:
@@ -268,7 +268,7 @@ def _aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: b
                      multimodal: bool = False, progress: aggregate_actions.Progress | None = None) -> dict:
     """一次跑完 目标检测 → 人脸识别 → 姿势检测绑定，返回结构化结果 + 带标注的结果图。
 
-    固定模型参数；同时勾选「姿势检测」「多模态识别」时按 Head 裁剪改用 VLM 动作分析：
+    勾选「多模态姿态识别」时，固定采用先全体 Head、再全体扩展 ROI 的策略一：
     目标检测就是「图片推理 → 目标检测」那一套；人脸识别固定用 FACE_CONFIDENCE /
     MATCH_THRESHOLD（生效值回报在 steps.face 里）；绑定规则固定（链式贪心 + 一一对应）。
     """
@@ -331,8 +331,8 @@ def _aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: b
 
     # ---------- 3) 姿势检测 + 绑定 ----------
     poses: list[dict] = []
-    steps['multimodal'] = {'enabled': False, 'reason': '需同时勾选姿势检测与多模态识别'}
-    if not pose:
+    steps['multimodal'] = {'enabled': False, 'reason': '未勾选多模态姿态识别'}
+    if not pose and not multimodal:
         steps["pose"] = {"enabled": False, "reason": "未勾选姿势检测"}
     elif multimodal:
         steps['pose'] = {'enabled': False, 'reason': '动作判断改用 VLM，不运行 Pose 规则'}
