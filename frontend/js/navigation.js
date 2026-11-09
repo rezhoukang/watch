@@ -5,8 +5,15 @@ let loadHistory = () => {};
 
 /* ==================== 标签页切换 ==================== */
 
-function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate, loadActions }) {
+function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate, loadActions, loadVideoAggregate }) {
   loadHistory = loadInferenceHistory;
+  el('toggleExtraFeatures').addEventListener('click', () => {
+    const button = el('toggleExtraFeatures');
+    const expanded = button.getAttribute('aria-expanded') !== 'true';
+    button.setAttribute('aria-expanded', String(expanded));
+    button.textContent = expanded ? '收起功能' : '更多功能';
+    document.querySelectorAll('#mainNavigation [data-extra-tab]').forEach(tab => { tab.hidden = !expanded; });
+  });
   document.querySelectorAll('.tab').forEach((tab) => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
@@ -25,6 +32,7 @@ function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadData
       if (name === 'train') loadDatasets();
       if (name === 'dataset') loadDatasets().then(loadAnnotateGrid);
       if (name === 'aggregate') loadAggregate();
+      if (name === 'video-aggregate') loadVideoAggregate();
       if (name === 'actions') loadActions();
     });
   });

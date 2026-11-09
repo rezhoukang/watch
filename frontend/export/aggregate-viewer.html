@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+  <title>聚合结果查看器</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px; color: #27384d; background: #f4f6fb; font: 14px Arial, sans-serif; }
+    main { max-width: 1280px; margin: auto; }
+    header, nav, .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+    header { justify-content: space-between; margin-bottom: 20px; }
+    h1 { font-size: 22px; margin: 0; } h2 { font-size: 17px; }
+    button, .file-button { cursor: pointer; border: 1px solid #dce2ed; border-radius: 6px; padding: 9px 14px; background: white; color: #314961; }
+    .file-button { background: #1677ed; color: white; border-color: #1677ed; }
+    nav { border-bottom: 1px solid #dce2ed; margin: 16px 0 20px; }
+    nav button { border: 0; border-radius: 0; background: transparent; border-bottom: 2px solid transparent; }
+    nav button.active { color: #1677ed; border-bottom-color: #1677ed; font-weight: bold; }
+    button:disabled { opacity: .45; cursor: default; }
+    .hint { color: #7b8796; line-height: 1.7; } #error { color: #c5221f; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(170px,1fr)); gap: 14px; }
+    .card { padding: 0; overflow: hidden; border: 1px solid #e3e8f0; border-radius: 10px; text-align: left; transition: border-color .16s, box-shadow .16s, transform .16s; }
+    .card:hover, .card:focus-visible { border-color: #1677ed; box-shadow: 0 6px 18px #1677ed26; transform: translateY(-3px); background: #f1f7ff; }
+    .card:focus-visible { outline: 2px solid #1677ed; outline-offset: 3px; }
+    .card img { width: 100%; height: 130px; object-fit: cover; display: block; }
+    .card span { display: block; padding: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+    .result-box { background: #fff; padding: 16px; border-radius: 10px; }
+    .toolbar { margin: 12px 0 18px; }
+    .toolbar label { white-space: nowrap; }
+    .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+    .chip { color: white; border: 0; border-radius: 18px; font-size: 12px; padding: 7px 12px; }
+    select { padding: 7px; border: 1px solid #dce2ed; border-radius: 5px; color: #314961; max-width: 260px; }
+    .viewer { position: relative; border-radius: 8px; }
+    .viewer > img { width: 100%; height: auto; display: block; border-radius: 8px; }
+    .boxes { position: absolute; inset: 0; pointer-events: none; }
+    .bbox { position: absolute; border: 1px solid var(--c); pointer-events: auto; }
+    .bbox.point { width: 9px !important; height: 9px !important; border-radius: 50%; background: var(--c); transform: translate(-50%,-50%); box-shadow: 0 0 0 1px white; }
+    .tag { display: none; position: absolute; bottom: 100%; left: 0; color: white; background: var(--c); padding: 3px 6px; white-space: nowrap; border-radius: 3px; font-size: 12px; z-index: 2; }
+    .bbox:hover .tag, .always-tags .tag { display: block; }
+    small { color: #7b8796; }
+    [hidden] { display: none !important; }
+    @media(max-width:600px) { body { padding: 14px; } .grid { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+<main>
+  <header><h1>聚合结果查看器</h1><label class="file-button">打开 JSON<input id="file" type="file" accept=".json,application/json" hidden></label></header>
+  <p class="hint" id="loaded">正在读取同目录的 results.json…</p>
+  <p id="error" role="alert"></p>
+  <nav><button id="galleryTab" class="active">聚合结果</button><button id="detailTab" disabled>聚合结果明细</button></nav>
+  <section id="gallery"><div id="grid" class="grid"></div></section>
+  <section id="detail" hidden>
+    <h2 id="title"></h2><p id="summary" class="hint"></p>
+    <div class="result-box">
+      <div class="toolbar">
+        <label><input id="tags" type="checkbox"> 常显标签</label>
+        <label><input id="points" type="checkbox"> 显示为点</label>
+        <div id="filters" class="chips"></div>
+        <label>姿态筛选 <select id="states"></select></label>
+      </div>
+      <div class="viewer" id="viewer"><img id="image" alt="聚合图"><div class="boxes" id="boxes"></div></div>
+      <p class="hint" id="count"></p>
+    </div>
+  </section>
+</main>
+<script id="embedded-results" type="application/json">null</script>
+<script>
+  const el = id => document.getElementById(id);
+  const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  const imageData = value => typeof value === 'string' && /^data:image\/(png|jpeg|webp|bmp);base64,[a-zA-Z0-9+/=]+$/.test(value);
+  let records = [], active = null, filter = 'all';
+  let manualImport = false;
+  const filters = [
+    { key: 'all', label: '全部 head', color: '#b62728', matches: () => true },
+    { key: 'named', label: '已贴姓名', color: '#42a878', matches: target => !!target.name },
+    { key: 'unknown', label: '未识别', color: '#9460ba', matches: target => !target.name },
+    { key: 'posed', label: '已有姿势 / 动作', color: '#b4a649', matches: target => target.action?.status === 'done' || (target.poses || []).length > 0 }
+  ];
+  function states(target) {
+    return target.action?.state ? [target.action.state] : (target.poses || []).map(pose => pose.behavior?.state).filter(Boolean);
+  }
+  function pane(detail) {
+    el('gallery').hidden = detail;
+    el('detail').hidden = !detail;
+    el('galleryTab').classList.toggle('active', !detail);
+    el('detailTab').classList.toggle('active', detail);
+  }
+  function paint() {
+    if (!active) return;
+    const result = active.result;
+    const predicate = filters.find(item => item.key === filter).matches;
+    const visible = result.targets.filter(target => predicate(target) && (el('states').value === 'all' || states(target).includes(el('states').value)));
+    el('viewer').classList.toggle('always-tags', el('tags').checked);
+    el('boxes').replaceChildren();
+    for (const target of visible) {
+      const [x1,y1,x2,y2] = target.bbox;
+      const point = el('points').checked;
+      const box = document.createElement('div');
+      box.className = point ? 'bbox point' : 'bbox';
+      box.style.setProperty('--c', target.name ? '#137333' : '#1a73e8');
+      box.style.left = `${(point ? (x1+x2)/2 : x1) / result.image_width * 100}%`;
+      box.style.top = `${(point ? (y1+y2)/2 : y1) / result.image_height * 100}%`;
+      box.style.width = `${(x2-x1) / result.image_width * 100}%`;
+      box.style.height = `${(y2-y1) / result.image_height * 100}%`;
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = [target.name || target.class_name || 'head', target.similarity ?? target.confidence ?? '', ...states(target)].join(' · ');
+      box.appendChild(tag); el('boxes').appendChild(box);
+    }
+    el('count').textContent = `图上 ${visible.length} 个 head / 共检出 ${result.targets.length} 个`;
+    el('filters').querySelectorAll('button').forEach(button => { button.style.opacity = button.dataset.filter === filter ? '1' : '.5'; });
+  }
+  function open(row) {
+    active = row; filter = 'all';
+    const result = row.result;
+    el('title').textContent = row.source;
+    el('summary').textContent = `${row.created_at || ''} · 人头 ${result.count} 个 · 总耗时 ${result.elapsed_seconds ?? '—'}s`;
+    el('image').src = result.source_url;
+    const counts = new Map();
+    result.targets.forEach(target => states(target).forEach(state => counts.set(state,(counts.get(state)||0)+1)));
+    el('states').innerHTML = '<option value="all">全部姿态</option>' + [...counts].map(([state,count]) => `<option value="${escapeText(state)}">${escapeText(state)}（${count}）</option>`).join('');
+    el('filters').innerHTML = filters.map(item => `<button class="chip" data-filter="${item.key}" style="background:${item.color}">${item.label} ${result.targets.filter(item.matches).length}</button>`).join('');
+    el('filters').querySelectorAll('button').forEach(button => button.addEventListener('click', () => { filter = button.dataset.filter; paint(); }));
+    el('detailTab').disabled = false; pane(true); paint();
+  }
+  function loadPayload(payload, label) {
+    if (payload?.schema !== 'aggregate-results' || payload.version !== 1 || !Array.isArray(payload.records)) throw new Error('请选择本平台导出的 results.json');
+    for (const row of payload.records) {
+      const result = row.result;
+      if (!result || !Array.isArray(result.targets) || !imageData(result.source_url) || !imageData(result.result_url) || !(result.image_width > 0) || !(result.image_height > 0)) throw new Error('JSON 缺少图片或明细数据');
+      if (result.targets.some(target => !Array.isArray(target.bbox) || target.bbox.length !== 4 || !target.bbox.every(Number.isFinite))) throw new Error('目标坐标无效');
+    }
+    records = payload.records; active = null; el('error').textContent = '';
+    el('loaded').textContent = `${label} · ${records.length} 条聚合结果`;
+    el('detailTab').disabled = true; pane(false);
+    el('grid').innerHTML = records.map((row,index) => `<button class="card" data-index="${index}"><img src="${row.result.result_url}" alt="${escapeText(row.source)}"><span>${escapeText(row.source)}<br>${escapeText(row.result.count)} 个目标<br><small>${escapeText(row.created_at || '')}</small></span></button>`).join('');
+    el('grid').querySelectorAll('button').forEach(button => button.addEventListener('click', () => open(records[Number(button.dataset.index)])));
+  }
+  el('file').addEventListener('change', async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    manualImport = true;
+    try { loadPayload(JSON.parse(await file.text()), file.name); }
+    catch (error) { el('error').textContent = error.message; }
+    finally { event.target.value = ''; }
+  });
+  async function loadDefault() {
+    try {
+      const response = await fetch('./results.json', { cache: 'no-store' });
+      if (!response.ok) throw new Error('无法读取同目录 JSON');
+      const payload = await response.json();
+      if (!manualImport) loadPayload(payload, '同目录 results.json');
+    } catch (error) {
+      if (manualImport) return;
+      const embedded = JSON.parse(el('embedded-results').textContent);
+      if (embedded) {
+        loadPayload(embedded, '导出内嵌数据（同目录 JSON 未能读取）');
+      } else {
+        el('loaded').textContent = '未能自动读取同目录 results.json，请点击“打开 JSON”选择文件。';
+      }
+    }
+  }
+  el('galleryTab').addEventListener('click', () => pane(false));
+  el('detailTab').addEventListener('click', () => { if (active) pane(true); });
+  for (const id of ['tags','points','states']) el(id).addEventListener('change', paint);
+  loadDefault().catch(error => { el('error').textContent = error.message; });
+</script>
+</body>
+</html>

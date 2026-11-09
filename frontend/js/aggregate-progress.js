@@ -10,7 +10,7 @@ function renderAggregateProgress(job, filename) {
   const stages = job.stages || [], stage = stages.find(item => item.key === job.stage);
   const percent = Math.max(0, Math.min(100, Number(job.percent) || 0));
   const known = typeof job.total === 'number';
-  const seconds = Math.max(0, ['completed', 'failed'].includes(job.status) ? job.elapsed_seconds || 0
+  const seconds = Math.max(0, ['completed', 'failed', 'cancelled'].includes(job.status) ? job.elapsed_seconds || 0
     : Date.now() / 1000 - (job.created_at || Date.now() / 1000)).toFixed(1);
   const stageStatus = { completed: '完成', running: '进行中', waiting: '待处理', failed: '失败' };
   el('aggStatus').textContent = `${stage?.label || '准备'} · 已用时 ${seconds}s`;
@@ -31,11 +31,12 @@ async function followAggregateJob(initial, filename) {
   const ticker = setInterval(() => renderAggregateProgress(job, filename), 500);
   try {
     renderAggregateProgress(job, filename);
-    while (!['completed', 'failed'].includes(job.status)) {
+    while (!['completed', 'failed', 'cancelled'].includes(job.status)) {
       await new Promise(resolve => setTimeout(resolve, 800));
       job = await api(`/api/aggregate/jobs/${job.job_id}`, {}, 15000);
       renderAggregateProgress(job, filename);
     }
+    if (job.status === 'cancelled') return null;
     if (job.status === 'failed') {
       const error = new Error(job.error || job.message || '聚合失败');
       error.job = job;

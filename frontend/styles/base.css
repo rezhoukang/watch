@@ -18,6 +18,7 @@ body {
   padding: 14px 0 18px;
 }
 .topbar h1 { font-size: 20px; }
+.topbar .more-features { margin-left: auto; flex-shrink: 0; }
 .badge {
   font-size: 12px;
   padding: 3px 10px;
@@ -29,7 +30,7 @@ body {
 .badge.err { background: #fce8e6; color: #c5221f; }
 
 /* 标签页 */
-.tabs { display: flex; gap: 6px; border-bottom: 2px solid #e4e6eb; margin-bottom: 18px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 2px solid #e4e6eb; margin-bottom: 18px; }
 .tab {
   border: none;
   background: transparent;

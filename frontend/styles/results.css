@@ -1,4 +1,10 @@
 /* 结果区 */
+.bbox.aggregate-point {
+  border-radius: 50%;
+  background: var(--c);
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 1px #fff;
+}
 .result-box {
   background: #fff;
   border-radius: 10px;
@@ -439,3 +445,21 @@
 }
 .result-box th { color: #80868b; font-weight: 500; }
 .result-box .summary { color: #137333; font-weight: 600; margin-bottom: 6px; }
+/* Aggregate parameter help is available on hover and keyboard focus. */
+#tab-aggregate > .toolbar:first-child { position: relative; }
+.aggregate-help { position: relative; display: inline-flex; align-items: center; }
+.aggregate-help-button { width: 21px; height: 21px; padding: 0; border: 1px solid #a8b5c4; border-radius: 50%; background: #fff; color: #63758a; font-size: 13px; font-weight: 600; cursor: help; }
+.aggregate-help-button:focus-visible { outline: 2px solid #2478e5; outline-offset: 3px; }
+.aggregate-help-tooltip { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); width: min(520px, calc(100vw - 48px)); padding-top: 8px; z-index: 50; visibility: hidden; opacity: 0; pointer-events: none; }
+.aggregate-help-content { display: block; padding: 14px 16px; border: 1px solid #d9e1ec; border-radius: 10px; background: #fff; box-shadow: 0 6px 22px #24395724; color: #526172; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.aggregate-help-content p { margin: 0; }
+.aggregate-help-content p + p { margin-top: 10px; }
+.aggregate-help:hover .aggregate-help-tooltip,
+.aggregate-help:focus-within .aggregate-help-tooltip { visibility: visible; opacity: 1; pointer-events: auto; }
+.aggregate-detail-controls { position: relative; }
+.aggregate-detail-help { position: static; }
+.aggregate-detail-help .aggregate-help-tooltip { left: 0; right: auto; transform: none; }
+@media (max-width: 600px) {
+  .aggregate-help { position: static; }
+  .aggregate-help-tooltip { left: 0; right: 0; width: auto; transform: none; }
+}

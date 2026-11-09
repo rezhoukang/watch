@@ -1,6 +1,7 @@
 /* Ordered to preserve the original cascade. */
-@import url('./styles/base.css?v=62');
-@import url('./styles/results.css?v=64');
+@import url('./styles/base.css?v=63');
+@import url('./styles/results.css?v=67');
 @import url('./styles/controls.css?v=62');
 @import url('./styles/annotator.css?v=62');
 @import url('./styles/actions.css?v=63');
+@import url('./styles/video-aggregate.css?v=107');

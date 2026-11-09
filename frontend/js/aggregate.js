@@ -1,8 +1,10 @@
 import { el, esc, api, showError } from './core.js?v=95';
 import { hideHoverPreview } from './preview.js?v=95';
-import { loadImageGallery } from './images.js?v=95';
+import { loadImageGallery, gallerySelection } from './images.js?v=111';
+import { followBatch } from './aggregate-batch.js?v=111';
+import { setupAggregateHistory, loadAggregateHistory } from './aggregate-history.js?v=114';
 import { classColor } from './viewer.js?v=95';
-import { renderAggregateProgress, followAggregateJob } from './aggregate-progress.js?v=106';
+import { renderAggregateProgress, followAggregateJob } from './aggregate-progress.js?v=111';
 
 /* ==================== 聚合推理（目标检测 → 人脸识别 → 姿势检测绑定）==================== */
 
@@ -14,19 +16,35 @@ const FILTERS = [
   { key: 'unknown', label: '未识别' },
   { key: 'posed', label: '已有姿势 / 动作' },
 ];
-const AGG_PANES = { images: 'aggregate-pane-images', result: 'aggregate-pane-result' };
+const AGG_PANES = { images: 'aggregate-pane-images', history: 'aggregate-pane-history', result: 'aggregate-pane-result' };
 let ACTIVE_RECORD = null;
 let ACTIVE_FILTER = 'all';
 let ACTIVE_STATE = 'all';
 let ALWAYS_TAGS = false;
+let SHOW_POINTS = false;
 let AGG_BUSY = false;
+let ACTIVE_JOB = null;
+let STOP_PENDING = false;
 
-/** 读取聚合参数：只有两个开关。
- *
- * 目标检测、人脸识别阈值、姿势配置与绑定规则全部锁在后端，前端不提交。
- */
-function readAggregateOptions() {
-  return { face: !!el('aggFaceRecognition').checked, multimodal: !!el('aggMultimodal').checked };
+function syncAggregateControls() {
+  const selection = gallerySelection('aggregate');
+  const busy = AGG_BUSY || selection.busy;
+  el('aggBatchStart').disabled = busy || !selection.selected.length;
+  el('aggStop').hidden = !AGG_BUSY;
+  el('aggStop').disabled = !ACTIVE_JOB || STOP_PENDING;
+  el('aggStop').textContent = STOP_PENDING ? '正在停止…' : '停止推理';
+  el('aggImageDeleteSelected').disabled = busy || !selection.selected.length;
+  el('aggImageClearSelection').disabled = busy || !selection.selected.length;
+  el('aggImageSelectAll').disabled = busy || !selection.count;
+  el('aggImageGrid').inert = AGG_BUSY;
+  el('aggFaceRecognition').disabled = AGG_BUSY;
+  el('aggMultimodal').disabled = AGG_BUSY;
+  el('aggImageGrid').querySelectorAll('input, button').forEach(node => { node.disabled = busy; });
+}
+
+function setAggregateBusy(value) {
+  AGG_BUSY = value;
+  syncAggregateControls();
 }
 
 function syncMultimodal() {
@@ -56,7 +74,8 @@ function switchAggregatePane(pane) {
   document.querySelectorAll('.subtab[data-agg]').forEach((tab) => {
     tab.classList.toggle('active', tab.dataset.agg === pane);
   });
-  el('aggRefresh').hidden = pane !== 'images';
+  el('aggRefresh').hidden = pane === 'result';
+  if (pane === 'history') loadAggregateHistory();
   if (pane !== 'images') hideHoverPreview();
   window.scrollTo(0, 0);
 }
@@ -121,6 +140,13 @@ function paintHeads() {
     node.style.top = pct(y1, record.image_height);
     node.style.width = pct(x2 - x1, record.image_width);
     node.style.height = pct(y2 - y1, record.image_height);
+    if (SHOW_POINTS) {
+      node.classList.add('aggregate-point');
+      node.style.left = pct((x1 + x2) / 2, record.image_width);
+      node.style.top = pct((y1 + y2) / 2, record.image_height);
+      node.style.width = '9px';
+      node.style.height = '9px';
+    }
     const tag = document.createElement('span');
     tag.className = 'tag';
     tag.textContent = headLabel(target);
@@ -205,31 +231,43 @@ function renderAggregateResult(record, filename) {
     '<div class="aggregate-progress"><label>聚合完成 · 100%<progress aria-label="聚合阶段进度" max="100" value="100"></progress></label></div>' +
     `<div class="agg-steps">${stepLine(record.steps)}</div>` +
     (notes.length ? `<p class="hint">${esc(notes.join('；'))}</p>` : '') +
-    `<div class="viewer-bar">` +
+    `<div class="viewer-bar aggregate-detail-controls">` +
     `<label><input type="checkbox" data-role="alwaystag"> 常显标签</label>` +
+    `<label><input type="checkbox" data-role="showpoints"> 显示为点</label>` +
     `<div class="chips" data-role="aggfilter">` +
     FILTERS.map((filter, index) => `<button class="chip" data-filter="${filter.key}" data-label="${esc(filter.label)}"` +
       ` style="background:${classColor(index)}">${esc(filter.label)}</button>`).join('') +
     `</div>` +
-    `<label>姿势 / 动作筛选 <select data-role="actionfilter" ${stateCounts.size ? '' : 'disabled'}>` +
-    `<option value="all">全部姿势 / 动作</option>` +
+    `<label>姿态筛选 <select data-role="actionfilter" ${stateCounts.size ? '' : 'disabled'}>` +
+    `<option value="all">全部姿态</option>` +
     [...stateCounts].map(([state, count]) => `<option value="state:${esc(state)}">${esc(state)}（${count}）</option>`).join('') +
-    '</select></label></div>' +
+    '</select></label>' +
+    '<div class="aggregate-help aggregate-detail-help">' +
+    '<button class="aggregate-help-button" type="button" aria-label="查看本条聚合结果说明" aria-describedby="aggRecordHelp">?</button>' +
+    '<div class="aggregate-help-tooltip" id="aggRecordHelp" role="tooltip"><div class="aggregate-help-content">' +
+    `<p>目标检测：${esc(record.steps?.detect?.rule || '')}</p>` +
+    `<p>姓名归属与姿势绑定：${esc(record.bind?.rule || '')}。结果只画 head 框，姓名与姿势状态都挂在这个框上；` +
+    `没绑上的人脸 / 姿势在清单里列出来，不会硬塞给某个人头。` +
+    (record.steps?.multimodal?.enabled ? 'VLM 动作由对应人头裁剪直接归属，无需 Pose 框匹配。' : '') + '</p>' +
+    '</div></div></div></div>' +
     `<div class="viewer" data-role="viewer">` +
-    `<img class="base" data-role="baseimg" src="/images/${encodeURIComponent(filename)}" alt="聚合图">` +
+    `<img class="base" data-role="baseimg" src="${esc(record.source_url || `/images/${encodeURIComponent(filename)}`)}" alt="聚合图">` +
     `<div class="boxes" data-role="boxes"></div></div>` +
     `<div class="viewer-foot"><span id="aggResultCount"></span>` +
     (record.result_url ? `<a href="${esc(record.result_url)}" target="_blank">后端渲染图（对照）</a>` : '') +
     `</div>` +
     `<div class="det-table-wrap"><table><thead><tr><th>人头</th><th>姓名</th><th>姿势 / 动作</th>` +
-    `<th>中心 (cx, cy)</th><th>左上右下 (x1, y1, x2, y2)</th></tr></thead><tbody>${rows}</tbody></table></div>` +
-    `<p class="hint">目标检测：${esc(record.steps?.detect?.rule || '')}<br>` +
-    `姓名归属与姿势绑定：${esc(record.bind?.rule || '')}。结果只画 head 框，姓名与姿势状态都挂在这个框上；` +
-    `没绑上的人脸 / 姿势在清单里列出来，不会硬塞给某个人头。` +
-    (record.steps?.multimodal?.enabled ? 'VLM 动作由对应人头裁剪直接归属，无需 Pose 框匹配。' : '') + '</p>';
+    `<th>中心 (cx, cy)</th><th>左上右下 (x1, y1, x2, y2)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+
 
   const tagToggle = box.querySelector('[data-role="alwaystag"]');
   tagToggle.checked = ALWAYS_TAGS;
+  const pointToggle = box.querySelector('[data-role="showpoints"]');
+  pointToggle.checked = SHOW_POINTS;
+  pointToggle.addEventListener('change', event => {
+    SHOW_POINTS = event.target.checked;
+    paintHeads();
+  });
   tagToggle.addEventListener('change', event => {
     ALWAYS_TAGS = event.target.checked;
     paintHeads();
@@ -249,49 +287,85 @@ function renderAggregateResult(record, filename) {
   paintHeads();
 }
 
-async function aggregateImage(filename) {
-  if (AGG_BUSY) return;
-  AGG_BUSY = true;
-  const box = el('aggResult');
-  ACTIVE_RECORD = null;
-  switchAggregatePane('result');
-  el('aggResultName').textContent = filename;
-  el('aggStatus').textContent = '';
-  try {
-    const payload = readAggregateOptions();
-    renderAggregateProgress({ created_at: Date.now() / 1000 }, filename);
-    const job = await api(`/api/aggregate/jobs/${encodeURIComponent(filename)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    }, 15000);
-    const result = await followAggregateJob(job, filename);
-    renderAggregateResult(result, filename);
-  } catch (error) {
-    showAggregateError(error, filename);
-  } finally {
-    AGG_BUSY = false;
-  }
-}
-
 async function loadAggregate() {
-  const gallery = await loadImageGallery('aggregate', aggregateImage);
+  const gallery = await loadImageGallery('aggregate');
   if (!AGG_BUSY) {
     try {
       const { job } = await api('/api/aggregate/jobs/active');
       if (job) {
-        AGG_BUSY = true;
+        ACTIVE_JOB = job.job_id;
+        STOP_PENDING = !!job.cancel_requested;
+        setAggregateBusy(true);
+        el('aggBatchPanel').hidden = !job.batch;
         switchAggregatePane('result');
         el('aggResultName').textContent = job.source;
-        followAggregateJob(job, job.source).then(result => renderAggregateResult(result, job.source))
+        const follow = job.batch ? followBatch(job, renderAggregateResult, trackJob) : followAggregateJob(job, job.source).then(result => { if (result) renderAggregateResult(result, job.source); });
+        follow
           .catch(error => showAggregateError(error, job.source))
-          .finally(() => { AGG_BUSY = false; });
+          .finally(() => { finishJob(); });
       }
     } catch (error) { showError(el('aggResult'), error, '查询聚合任务失败'); }
   }
   return gallery;
 }
 
-el('aggRefresh').addEventListener('click', loadAggregate);
+function trackJob(job) {
+  ACTIVE_JOB = job.job_id;
+  STOP_PENDING = !!job.cancel_requested;
+  syncAggregateControls();
+}
+
+function finishJob() {
+  ACTIVE_JOB = null;
+  STOP_PENDING = false;
+  setAggregateBusy(false);
+}
+
+el('aggStop').addEventListener('click', async () => {
+  if (!ACTIVE_JOB || STOP_PENDING) return;
+  STOP_PENDING = true;
+  syncAggregateControls();
+  try {
+    await api(`/api/aggregate/jobs/${ACTIVE_JOB}/cancel`, { method: 'POST' });
+  } catch (error) {
+    STOP_PENDING = false;
+    el('aggStatus').textContent = `停止请求失败：${error.message}`;
+    syncAggregateControls();
+  }
+});
+
+el('aggBatchStart').addEventListener('click', async () => {
+  const filenames = gallerySelection('aggregate').selected;
+  if (AGG_BUSY || !filenames.length) return;
+  setAggregateBusy(true);
+  ACTIVE_RECORD = null;
+  el('aggStatus').textContent = '';
+  el('aggBatchPanel').hidden = true;
+  switchAggregatePane('result');
+  el('aggResult').textContent = '批量任务正在准备，完成的图片可在上方逐张查看。';
+  try {
+    const job = await api('/api/aggregate/batch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filenames, multimodal: !!el('aggMultimodal').checked }),
+    });
+    await followBatch(job, renderAggregateResult, trackJob);
+  } catch (error) { showAggregateError(error, filenames[0]); }
+  finally { finishJob(); }
+});
+document.addEventListener('gallery-selection-change', event => {
+  if (event.detail.kind === 'aggregate') syncAggregateControls();
+});
+
+setupAggregateHistory(row => {
+  el('aggBatchPanel').hidden = true;
+  renderAggregateResult(row.result, row.source);
+  switchAggregatePane('result');
+});
+el('aggRefresh').addEventListener('click', () => {
+  if (el('aggregate-pane-history').classList.contains('active')) return loadAggregateHistory();
+  return loadAggregate();
+});
 el('aggMultimodal').addEventListener('change', syncMultimodal);
 syncMultimodal();
 
-export { loadAggregate, aggregateImage, renderAggregateResult, switchAggregatePane };
+export { loadAggregate, renderAggregateResult, switchAggregatePane };

@@ -2,7 +2,7 @@
 
 三步互相独立、后两步可分别开关：
 1. 目标检测：固定复用「图片推理 → 目标检测」那套人头检测（medium.pt 0.45 为基准、
-   RT-DETRv4 0.25 补齐；合并 IoU ≤ 0.1、自定义 IoU 生效置信度 > 0.55 在这里锁死，
+   RT-DETRv4 0.25 补齐；合并 IoU ≤ 0.1、自定义 IoU 生效置信度 > 0.35 在这里锁死，
    前端不暴露这些开关）；
 2. 人脸识别：整图 SCRFD 检出所有人脸 → 质量筛选 → ArcFace 提特征 → 1:N 比对，
    并把识别到的**姓名贴到最贴合的人头框**上（人脸中心落在哪个人头框内就归给谁，
@@ -42,6 +42,8 @@ POSE_OBJECT_CONFIDENCE = 0.03
 
 # 目标检测：与「图片推理 → 目标检测」完全一致，以 medium.pt 为基准（False）
 RTDETR_BASE = False
+MERGE_IOU = 0.1
+MERGE_CONFIDENCE = 0.35
 
 # 绑定规则（固定，不对外暴露）：只要求 IoU > 0，链式贪心 + 一一对应
 MIN_BIND_IOU = 0.0
@@ -158,11 +160,11 @@ def detect_targets(src: Path) -> dict:
     """目标检测：固定复用「图片推理 → 目标检测」的人头检测。
 
     medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐；合并 IoU ≤ 0.1、自定义 IoU 生效
-    置信度 > 0.55 全部锁死在这里，前端不暴露——避免两套目标检测参数各自漂移。
+    置信度 > 0.35 全部锁死在这里，前端不暴露——避免两套目标检测参数各自漂移。
     """
     result = head_fusion.detect_image(src, rtdetr_base=RTDETR_BASE,
-                                      merge_iou=head_fusion.DEFAULT_MERGE_IOU,
-                                      merge_confidence=head_fusion.DEFAULT_MERGE_CONFIDENCE)
+                                      merge_iou=MERGE_IOU,
+                                      merge_confidence=MERGE_CONFIDENCE)
     detections = [{"class_id": int(d.get("class_id", 0)), "class_name": d["class_name"],
                    "confidence": round(float(d["confidence"]), 4),
                    "bbox": [round(float(v), 2) for v in d["bbox"]],
@@ -171,8 +173,8 @@ def detect_targets(src: Path) -> dict:
     fusion = result.get("fusion") or {}
     rule = (f"medium.pt {head_fusion.BASE_CONFIDENCE} 为基准 + "
             f"{fusion.get('incoming_weight', '')} {head_fusion.HEAD_CONFIDENCE} 补齐；"
-            f"合并 IoU ≤ {fusion.get('merge_iou', head_fusion.DEFAULT_MERGE_IOU)}、"
-            f"自定义 IoU 生效置信度 > {fusion.get('merge_confidence', head_fusion.DEFAULT_MERGE_CONFIDENCE)}")
+            f"合并 IoU ≤ {fusion.get('merge_iou', MERGE_IOU)}、"
+            f"自定义 IoU 生效置信度 > {fusion.get('merge_confidence', MERGE_CONFIDENCE)}")
     return {"detections": detections, "mode": result["mode"], "imgsz": result["imgsz"],
             "classes_used": result.get("classes_used", []), "weight": result.get("weight"),
             "fusion": fusion, "rule": rule}

@@ -33,6 +33,12 @@ function syncGallerySelection(kind) {
     const del = figure.querySelector('.del-btn');
     if (del) del.disabled = busy;
   });
+  document.dispatchEvent(new CustomEvent('gallery-selection-change', { detail: { kind } }));
+}
+
+function gallerySelection(kind) {
+  const state = GALLERY_STATE[kind];
+  return { selected: [...state.selected], busy: state.busy, count: state.items.length };
 }
 
 function setGalleryItems(kind, items) {
@@ -111,7 +117,7 @@ async function loadImageGallery(kind, onImageClick) {
     box.innerHTML = '';
     data.images.forEach((img) => {
       const fig = document.createElement('figure');
-      fig.title = (kind === 'aggregate' ? '点击聚合：' : '点击推理：') + img.filename;
+      fig.title = (kind === 'aggregate' ? '点击选择：' : '点击推理：') + img.filename;
       fig.innerHTML = `<img src="${esc(img.url)}" alt=""><figcaption>${esc(img.filename)}</figcaption>`;
 
       addGalleryControls(fig, kind, img.filename, img.filename);
@@ -119,6 +125,11 @@ async function loadImageGallery(kind, onImageClick) {
       fig.addEventListener('click', () => {
         if (state.busy) return;
         hideHoverPreview();
+        if (kind === 'aggregate') {
+          const check = fig.querySelector('[data-gallery-select]');
+          check.click();
+          return;
+        }
         return onImageClick(img.filename);
       });
       box.appendChild(fig);
@@ -428,4 +439,4 @@ function renderImageResult(record, filename, confidence, elapsed, imgsz) {
   });
 }
 
-export { loadImages, loadImageGallery, detectImage, loadInferenceHistory };
+export { loadImages, loadImageGallery, detectImage, loadInferenceHistory, gallerySelection };

@@ -12,7 +12,27 @@ LABELS = {'prepare': '准备图片与模型', 'detect': '目标检测', 'face': 
 _lock = threading.RLock()
 _runner = threading.Lock()
 JOBS: dict[str, dict] = {}
-TERMINAL = {'completed', 'failed'}
+TERMINAL = {'completed', 'failed', 'cancelled'}
+
+
+class Cancelled(RuntimeError):
+    """Cooperative stop at a stage or target boundary."""
+
+
+def check_cancelled(job_id: str) -> None:
+    with _lock:
+        if JOBS[job_id].get('cancel_requested'):
+            raise Cancelled('推理已停止')
+
+
+def cancel(job_id: str) -> dict:
+    with _lock:
+        if job_id not in JOBS:
+            raise FileNotFoundError('聚合任务不存在或服务已重启')
+        job = JOBS[job_id]
+        if job['status'] not in TERMINAL:
+            job.update(cancel_requested=True, message='正在停止，等待当前模型调用结束')
+        return copy.deepcopy(job)
 
 
 def get(job_id: str) -> dict:
@@ -52,6 +72,7 @@ def start(src: Path, options: dict) -> dict:
                         'stages': [{'key': key, 'label': LABELS[key], 'status': 'waiting'} for key in plan]}
 
     def progress(event):
+        check_cancelled(job_id)
         with _lock:
             job = JOBS[job_id]
             key = event['stage']
@@ -76,6 +97,9 @@ def start(src: Path, options: dict) -> dict:
                 JOBS[job_id].update(status='completed', result=result, percent=100, message='聚合完成')
                 for stage in JOBS[job_id]['stages']:
                     stage['status'] = 'completed'
+        except Cancelled:
+            with _lock:
+                JOBS[job_id].update(status='cancelled', message='推理已停止')
         except Exception as error:
             with _lock:
                 job = JOBS[job_id]

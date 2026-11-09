@@ -38,7 +38,7 @@ def head_detections() -> dict:
             "classes_used": ['head']}
     incoming = {"detections": [{"class_id": 0, "class_name": 'head', "confidence": .6, "bbox": [210, 10, 260, 70]}],
                 "classes_used": ['head']}
-    return head_fusion.fuse_results(base, incoming)
+    return head_fusion.fuse_results(base, incoming, merge_iou=.1, merge_confidence=.35)
 
 
 def pose_result() -> Results:
@@ -240,10 +240,10 @@ class AggregateApiTests(unittest.TestCase):
         record = self.post().json()
         # 前端不再传目标检测参数：后端固定 medium.pt 0.45 基准 + RT-DETRv4 0.25 补齐，IoU 规则锁死
         self.assertEqual(self.detection.call_args.kwargs,
-                         {'rtdetr_base': False, 'merge_iou': .1, 'merge_confidence': .55})
+                         {'rtdetr_base': False, 'merge_iou': .1, 'merge_confidence': .35})
         self.assertEqual(record['steps']['detect']['mode'], 'head_fusion')
         self.assertIn('合并 IoU ≤ 0.1', record['steps']['detect']['rule'])
-        self.assertIn('自定义 IoU 生效置信度 > 0.55', record['steps']['detect']['rule'])
+        self.assertIn('自定义 IoU 生效置信度 > 0.35', record['steps']['detect']['rule'])
 
     def test_stale_target_detection_params_are_ignored(self):
         record = self.post(weights='yolov8m-pose.pt', confidence=.9, imgsz=1280,
