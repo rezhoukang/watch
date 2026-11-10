@@ -5,7 +5,7 @@ let loadHistory = () => {};
 
 /* ==================== 标签页切换 ==================== */
 
-function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate, loadActions, loadVideoAggregate }) {
+function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadDatasets, loadAnnotateGrid, loadHeadCuts, loadAggregate, loadActions, loadVideoAggregate, loadMirror }) {
   loadHistory = loadInferenceHistory;
   el('toggleExtraFeatures').addEventListener('click', () => {
     const button = el('toggleExtraFeatures');
@@ -32,6 +32,7 @@ function initNavigation({ loadImages, loadInferenceHistory, loadVideos, loadData
       if (name === 'train') loadDatasets();
       if (name === 'dataset') loadDatasets().then(loadAnnotateGrid);
       if (name === 'aggregate') loadAggregate();
+      if (name === 'mirror') loadMirror();
       if (name === 'video-aggregate') loadVideoAggregate();
       if (name === 'actions') loadActions();
     });

@@ -1,12 +1,39 @@
 """media: extracted API routes; URLs and response formats are unchanged."""
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import json
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 import vision
+from pydantic import BaseModel, Field
 from . import common
+from . import image_folders
 
 router = APIRouter()
+
+
+class ImageFolderCreate(BaseModel):
+    name: str
+    parent: str = ''
+
+
+class ImageFolderMove(BaseModel):
+    filenames: list[str] = Field(default_factory=list, max_length=1000)
+    target: str = ''
+
+
+@router.post('/api/image-folders')
+def create_image_folder(payload: ImageFolderCreate):
+    return image_folders.create_folder(payload.name, payload.parent)
+
+
+@router.post('/api/image-folders/move')
+def move_image_folders(payload: ImageFolderMove):
+    return image_folders.move(payload.filenames, payload.target)
+
+
+@router.post('/api/upload-folder-image')
+async def upload_folder_image(file: UploadFile = File(...), relative_path: str = Form(...)):
+    return image_folders.upload(file, relative_path)
 
 
 # ---------- 上传 ----------
@@ -48,6 +75,7 @@ def delete_images(payload: dict) -> dict:
 # ---------- 列表 ----------
 @router.get("/api/images", summary="图片 + 结果列表")
 def list_images() -> dict:
+    folder_paths = image_folders.paths()
     files = (
         sorted((p.name for p in common.UPLOAD_DIR.iterdir() if p.is_file()), reverse=True)
         if common.UPLOAD_DIR.is_dir()
@@ -60,7 +88,10 @@ def list_images() -> dict:
     )
     return {
         "count": len(files),
-        "images": [{"filename": f, "url": f"/images/{f}"} for f in files],
+        "folders": image_folders.folders(),
+        "images": [{"filename": f, "url": f"/images/{f}",
+                    "relative_path": folder_paths.get(f),
+                    "display_name": PurePosixPath(folder_paths.get(f, f)).name} for f in files],
         "results": [{"filename": f, "url": f"/results/{f}"} for f in results],
     }
 

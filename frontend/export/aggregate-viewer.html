@@ -25,6 +25,9 @@
     .card:focus-visible { outline: 2px solid #1677ed; outline-offset: 3px; }
     .card img { width: 100%; height: 130px; object-fit: cover; display: block; }
     .card span { display: block; padding: 10px; line-height: 1.7; overflow-wrap: anywhere; }
+    .hover-preview { position: fixed; z-index: 20; width: min(560px,calc(100vw - 24px)); padding: 8px; background: white; border: 1px solid #dce2ed; border-radius: 10px; box-shadow: 0 10px 32px #27384d33; pointer-events: none; }
+    .hover-preview img { display: block; width: 100%; max-height: min(440px,calc(100vh - 100px)); object-fit: contain; border-radius: 6px; }
+    .hover-preview p { margin: 8px 2px 2px; line-height: 1.5; overflow-wrap: anywhere; }
     .result-box { background: #fff; padding: 16px; border-radius: 10px; }
     .toolbar { margin: 12px 0 18px; }
     .toolbar label { white-space: nowrap; }
@@ -33,6 +36,11 @@
     select { padding: 7px; border: 1px solid #dce2ed; border-radius: 5px; color: #314961; max-width: 260px; }
     .viewer { position: relative; border-radius: 8px; }
     .viewer > img { width: 100%; height: auto; display: block; border-radius: 8px; }
+    .result-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 8; width: 44px; height: 64px; padding: 0; border: 1px solid #dce2ed; border-radius: 12px; background: #ffffffed; color: #35608b; font-size: 36px; line-height: 1; box-shadow: 0 3px 12px #27384d14; }
+    .result-nav.previous { left: -58px; } .result-nav.next { right: -58px; }
+    .result-nav:hover:not(:disabled) { background: #eaf3ff; border-color: #1677ed; color: #1677ed; }
+    .result-nav:focus-visible { outline: 2px solid #1677ed; outline-offset: 3px; }
+    @media(max-width:1400px) { .result-nav.previous { left: 8px; } .result-nav.next { right: 8px; } }
     .boxes { position: absolute; inset: 0; pointer-events: none; }
     .bbox { position: absolute; border: 1px solid var(--c); pointer-events: auto; }
     .bbox.point { width: 9px !important; height: 9px !important; border-radius: 50%; background: var(--c); transform: translate(-50%,-50%); box-shadow: 0 0 0 1px white; }
@@ -46,7 +54,7 @@
 <body>
 <main>
   <header><h1>聚合结果查看器</h1><label class="file-button">打开 JSON<input id="file" type="file" accept=".json,application/json" hidden></label></header>
-  <p class="hint" id="loaded">正在读取同目录的 results.json…</p>
+  <p class="hint" id="loaded">正在读取同目录 JSON…</p>
   <p id="error" role="alert"></p>
   <nav><button id="galleryTab" class="active">聚合结果</button><button id="detailTab" disabled>聚合结果明细</button></nav>
   <section id="gallery"><div id="grid" class="grid"></div></section>
@@ -59,11 +67,15 @@
         <div id="filters" class="chips"></div>
         <label>姿态筛选 <select id="states"></select></label>
       </div>
-      <div class="viewer" id="viewer"><img id="image" alt="聚合图"><div class="boxes" id="boxes"></div></div>
+      <div class="viewer" id="viewer"><img id="image" alt="聚合图"><div class="boxes" id="boxes"></div>
+        <button type="button" id="previousResult" class="result-nav previous" aria-label="上一个" title="上一个">‹</button>
+        <button type="button" id="nextResult" class="result-nav next" aria-label="下一个" title="下一个">›</button>
+      </div>
       <p class="hint" id="count"></p>
     </div>
   </section>
 </main>
+<div id="hoverPreview" class="hover-preview" hidden aria-hidden="true"><img id="hoverImage" alt=""><p id="hoverCaption"></p></div>
 <script id="embedded-results" type="application/json">null</script>
 <script>
   const el = id => document.getElementById(id);
@@ -71,6 +83,34 @@
   const imageData = value => typeof value === 'string' && /^data:image\/(png|jpeg|webp|bmp);base64,[a-zA-Z0-9+/=]+$/.test(value);
   let records = [], active = null, filter = 'all';
   let manualImport = false;
+  let previewCard = null;
+  function hidePreview() {
+    previewCard = null;
+    el('hoverPreview').hidden = true;
+    el('hoverImage').removeAttribute('src');
+  }
+  function positionPreview() {
+    if (!previewCard) return;
+    const card = previewCard.getBoundingClientRect();
+    const preview = el('hoverPreview');
+    const width = preview.offsetWidth, height = preview.offsetHeight;
+    const right = card.right + 12;
+    const left = right + width <= innerWidth - 12 ? right : card.left - width - 12;
+    preview.style.left = `${Math.max(12, Math.min(left, innerWidth - width - 12))}px`;
+    preview.style.top = `${Math.max(12, Math.min(card.top, innerHeight - height - 12))}px`;
+  }
+  function showPreview(card, row) {
+    previewCard = card;
+    el('hoverImage').src = row.result.result_url;
+    el('hoverCaption').textContent = `${row.source} · ${row.result.count} 个目标`;
+    el('hoverPreview').hidden = false;
+    positionPreview();
+  }
+  el('hoverImage').addEventListener('load', positionPreview);
+  window.addEventListener('scroll', hidePreview, true);
+  window.addEventListener('resize', hidePreview);
+  window.addEventListener('blur', hidePreview);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') hidePreview(); });
   const filters = [
     { key: 'all', label: '全部 head', color: '#b62728', matches: () => true },
     { key: 'named', label: '已贴姓名', color: '#42a878', matches: target => !!target.name },
@@ -81,6 +121,7 @@
     return target.action?.state ? [target.action.state] : (target.poses || []).map(pose => pose.behavior?.state).filter(Boolean);
   }
   function pane(detail) {
+    hidePreview();
     el('gallery').hidden = detail;
     el('detail').hidden = !detail;
     el('galleryTab').classList.toggle('active', !detail);
@@ -113,6 +154,9 @@
   }
   function open(row) {
     active = row; filter = 'all';
+    const index = records.indexOf(row);
+    el('previousResult').disabled = index <= 0;
+    el('nextResult').disabled = index < 0 || index >= records.length - 1;
     const result = row.result;
     el('title').textContent = row.source;
     el('summary').textContent = `${row.created_at || ''} · 人头 ${result.count} 个 · 总耗时 ${result.elapsed_seconds ?? '—'}s`;
@@ -132,10 +176,19 @@
       if (result.targets.some(target => !Array.isArray(target.bbox) || target.bbox.length !== 4 || !target.bbox.every(Number.isFinite))) throw new Error('目标坐标无效');
     }
     records = payload.records; active = null; el('error').textContent = '';
+    document.querySelector('h1').textContent = payload.title || '聚合结果查看器';
+    document.title = payload.title || '聚合结果查看器';
     el('loaded').textContent = `${label} · ${records.length} 条聚合结果`;
     el('detailTab').disabled = true; pane(false);
     el('grid').innerHTML = records.map((row,index) => `<button class="card" data-index="${index}"><img src="${row.result.result_url}" alt="${escapeText(row.source)}"><span>${escapeText(row.source)}<br>${escapeText(row.result.count)} 个目标<br><small>${escapeText(row.created_at || '')}</small></span></button>`).join('');
-    el('grid').querySelectorAll('button').forEach(button => button.addEventListener('click', () => open(records[Number(button.dataset.index)])));
+    el('grid').querySelectorAll('button').forEach(button => {
+      const row = records[Number(button.dataset.index)];
+      button.addEventListener('mouseenter', () => showPreview(button, row));
+      button.addEventListener('mouseleave', hidePreview);
+      button.addEventListener('focus', () => showPreview(button, row));
+      button.addEventListener('blur', hidePreview);
+      button.addEventListener('click', () => open(row));
+    });
   }
   el('file').addEventListener('change', async event => {
     const file = event.target.files[0];
@@ -150,7 +203,7 @@
       const response = await fetch('./results.json', { cache: 'no-store' });
       if (!response.ok) throw new Error('无法读取同目录 JSON');
       const payload = await response.json();
-      if (!manualImport) loadPayload(payload, '同目录 results.json');
+      if (!manualImport) loadPayload(payload, '同目录 JSON');
     } catch (error) {
       if (manualImport) return;
       const embedded = JSON.parse(el('embedded-results').textContent);
@@ -162,6 +215,14 @@
     }
   }
   el('galleryTab').addEventListener('click', () => pane(false));
+  el('previousResult').addEventListener('click', () => {
+    const index = records.indexOf(active);
+    if (index > 0) open(records[index - 1]);
+  });
+  el('nextResult').addEventListener('click', () => {
+    const index = records.indexOf(active);
+    if (index >= 0 && index < records.length - 1) open(records[index + 1]);
+  });
   el('detailTab').addEventListener('click', () => { if (active) pane(true); });
   for (const id of ['tags','points','states']) el(id).addEventListener('change', paint);
   loadDefault().catch(error => { el('error').textContent = error.message; });

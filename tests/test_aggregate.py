@@ -50,6 +50,42 @@ def pose_result() -> Results:
                    keypoints=torch.tensor([base, keypoints_of(100)], dtype=torch.float32))
 
 
+class MirrorSelectionTests(unittest.TestCase):
+    def test_larger_result_wins_ties_keep_original_and_coordinates_are_restored(self):
+        image = np.zeros((60, 120, 3), dtype=np.uint8)
+        image[:, :60] = (0, 0, 255)
+        for original_count, mirrored_count in [(1, 2), (2, 2), (2, 1), (0, 0)]:
+            with self.subTest(original=original_count, mirrored=mirrored_count):
+                def result(count, confidence):
+                    return {'rule': '测试检测', 'detections': [
+                        {'bbox': [10, 15, 30, 35], 'class_name': 'head', 'confidence': confidence}
+                        for _ in range(count)]}
+                original = result(original_count, .8)
+                mirrored = result(mirrored_count, .9)
+                observed_paths = []
+                def detect(path):
+                    observed_paths.append(path)
+                    if len(observed_paths) == 1:
+                        return original
+                    flipped = aggregate.read_image(path)
+                    np.testing.assert_array_equal(flipped, image[:, ::-1])
+                    return mirrored
+                with patch.object(aggregate, 'detect_targets', side_effect=detect):
+                    selected = aggregate.detect_best_targets(Path('original.png'), image)
+                use_mirror = mirrored_count > original_count
+                self.assertEqual(selected['mirror_selection'], {
+                    'original_count': original_count, 'mirror_count': mirrored_count,
+                    'selected': 'mirror' if use_mirror else 'original', 'coordinates': 'original',
+                })
+                self.assertEqual(len(selected['detections']), max(original_count, mirrored_count))
+                if selected['detections']:
+                    self.assertEqual(selected['detections'][0]['bbox'], [90, 15, 110, 35] if use_mirror else [10, 15, 30, 35])
+                    self.assertEqual(selected['detections'][0]['confidence'], .9 if use_mirror else .8)
+                if mirrored_count:
+                    self.assertEqual(mirrored['detections'][0]['bbox'], [10, 15, 30, 35])
+                self.assertFalse(observed_paths[1].exists())
+
+
 class BindFacesTests(unittest.TestCase):
     """姓名归属：只保留 IoU > 0 的配对，链式贪心 + 一一对应。"""
 

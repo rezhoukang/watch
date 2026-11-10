@@ -2,6 +2,8 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
+from urllib.parse import quote
+from typing import Literal
 
 import aggregate
 import aggregate_jobs
@@ -10,6 +12,7 @@ import aggregate_history
 import face_recognition
 from project_paths import IMAGE_EXTENSIONS
 from . import common
+from . import image_folders
 
 router = APIRouter()
 
@@ -30,12 +33,63 @@ class BatchRequest(BaseModel):
 
 
 class HistorySelection(BaseModel):
-    record_ids: list[str] = Field(min_length=1, max_length=1000)
+    record_ids: list[str] = Field(default_factory=list, max_length=1000)
+    folder_ids: list[str] = Field(default_factory=list, max_length=1000)
+
+
+class HistoryExport(BaseModel):
+    record_ids: list[str] = Field(default_factory=list, max_length=1000)
+    folder_ids: list[str] = Field(default_factory=list, max_length=1000)
+    compression: Literal['original', 'balanced', 'compact'] = 'original'
+
+
+class HistoryRerun(HistorySelection):
+    multimodal: bool = False
+
+
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    parent_id: str | None = None
+
+
+class FolderMove(BaseModel):
+    record_ids: list[str] = Field(default_factory=list, max_length=1000)
+    folder_ids: list[str] = Field(default_factory=list, max_length=1000)
+    folder_id: str | None = None
+
+
+@router.get('/api/aggregate/folders')
+def history_folders():
+    aggregate_history.sync_source_folders(image_folders.paths())
+    return {'folders': aggregate_history.folders()}
+
+
+@router.post('/api/aggregate/folders')
+def history_create_folder(payload: FolderCreate):
+    try:
+        return aggregate_history.create_folder(payload.name, payload.parent_id)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post('/api/aggregate/folders/move')
+def history_move_folder(payload: FolderMove):
+    try:
+        if not payload.record_ids and not payload.folder_ids:
+            raise HTTPException(status_code=422, detail='请选择记录或文件夹')
+        aggregate_history.move_to_folder(payload.record_ids, payload.folder_id, payload.folder_ids)
+        return {'ok': True}
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get('/api/aggregate/history')
 def history_list():
-    return {'records': aggregate_history.listing()}
+    return {'records': aggregate_history.sync_source_folders(image_folders.paths())}
 
 
 @router.get('/api/aggregate/history/{record_id}')
@@ -48,18 +102,43 @@ def history_record(record_id: str):
 
 @router.post('/api/aggregate/history/delete')
 def history_delete(payload: HistorySelection):
-    return aggregate_history.delete(payload.record_ids)
+    if not payload.record_ids and not payload.folder_ids:
+        raise HTTPException(status_code=422, detail='请选择记录或文件夹')
+    return aggregate_history.delete(payload.record_ids, payload.folder_ids)
 
 
 @router.post('/api/aggregate/history/export')
-def history_export(payload: HistorySelection):
+def history_export(payload: HistoryExport):
     try:
-        return Response(aggregate_history.export(payload.record_ids), media_type='application/zip', headers={
-            'Content-Disposition': 'attachment; filename="aggregate-results.zip"'})
+        if not payload.record_ids and not payload.folder_ids:
+            raise HTTPException(status_code=422, detail='请选择记录或文件夹')
+        content, filename = aggregate_history.export_selection(payload.record_ids, payload.folder_ids, payload.compression)
+        return Response(content, media_type='application/zip', headers={
+            'Content-Disposition': f"attachment; filename=\"aggregate-results.zip\"; filename*=UTF-8''{quote(filename, safe='')}"})
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@router.post('/api/aggregate/history/rerun', summary='使用保存的原图重新聚合推理')
+def history_rerun(payload: HistoryRerun):
+    try:
+        records = aggregate_history.selected_records(payload.record_ids, payload.folder_ids)
+        if not records:
+            raise HTTPException(status_code=422, detail='请选择包含结果记录的图片或文件夹')
+        sources = [common._safe_file(aggregate_batch.directory(row['id'].split('-')[0]) / 'sources',
+                                     row['source_file']) for row in records]
+        common._require_head_detection()
+        paths = image_folders.paths()
+        return aggregate_batch.start(sources, payload.multimodal, display_names=[row['source'] for row in records],
+                                     relative_paths=[row.get('relative_path') or paths.get(
+                                         row['source_file'], paths.get(row['source'], row['source']))
+                                                     for row in records])
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.post('/api/aggregate/batch', summary='批量目标检测与多模态姿态识别')
@@ -69,14 +148,16 @@ def start_batch(payload: BatchRequest):
     if any(path.suffix.lower() not in IMAGE_EXTENSIONS for path in sources):
         raise HTTPException(status_code=400, detail='只能批量聚合图片')
     try:
-        return aggregate_batch.start(sources, payload.multimodal)
+        paths = image_folders.paths()
+        return aggregate_batch.start(sources, payload.multimodal,
+                                     relative_paths=[paths.get(source.name, source.name) for source in sources])
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.get('/api/aggregate/batches/{job_id}/{kind}/{filename}')
 def batch_image(job_id: str, kind: str, filename: str):
-    if kind not in ('sources', 'results'):
+    if kind not in ('sources', 'results', 'mirrors', 'mirror-results'):
         raise HTTPException(status_code=404, detail='图片不存在')
     try:
         root = aggregate_batch.directory(job_id)

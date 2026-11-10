@@ -1,8 +1,8 @@
 import { el, esc, api, showError } from './core.js?v=95';
 import { hideHoverPreview } from './preview.js?v=95';
-import { loadImageGallery, gallerySelection } from './images.js?v=111';
-import { followBatch } from './aggregate-batch.js?v=111';
-import { setupAggregateHistory, loadAggregateHistory } from './aggregate-history.js?v=114';
+import { loadImageGallery, gallerySelection } from './images.js?v=127';
+import { followBatch } from './aggregate-batch.js?v=126';
+import { setupAggregateHistory, loadAggregateHistory, aggregateHistorySelection } from './aggregate-history.js?v=126';
 import { classColor } from './viewer.js?v=95';
 import { renderAggregateProgress, followAggregateJob } from './aggregate-progress.js?v=111';
 
@@ -25,11 +25,95 @@ let SHOW_POINTS = false;
 let AGG_BUSY = false;
 let ACTIVE_JOB = null;
 let STOP_PENDING = false;
+let RESULT_NAVIGATION = null;
+let RESULT_NAVIGATING = false;
+let RESULT_ZOOM = 1;
+
+let PAN_SPACE = false;
+let PAN_DRAG = null;
+
+function endResultPan() {
+  if (!PAN_DRAG) return;
+  const { viewport, pointerId } = PAN_DRAG;
+  PAN_DRAG = null;
+  viewport.classList.remove('is-panning');
+  if (viewport.hasPointerCapture(pointerId)) viewport.releasePointerCapture(pointerId);
+}
+
+function updatePanCursor() {
+  const viewport = el('aggResult').querySelector('[data-role="zoomviewport"]');
+  viewport?.classList.toggle('is-pan-ready', PAN_SPACE && RESULT_ZOOM > 1);
+}
+
+function resetResultPan() {
+  PAN_SPACE = false;
+  endResultPan();
+  updatePanCursor();
+}
+
+document.addEventListener('keydown', event => {
+  if (event.code !== 'Space' || RESULT_ZOOM <= 1 ||
+      !el('tab-aggregate').classList.contains('active') ||
+      !el('aggregate-pane-result').classList.contains('active') ||
+      event.target.closest?.('input:not([type="range"]),textarea,select,[contenteditable="true"]')) return;
+  event.preventDefault();
+  PAN_SPACE = true;
+  updatePanCursor();
+});
+document.addEventListener('keyup', event => { if (event.code === 'Space') resetResultPan(); });
+window.addEventListener('blur', resetResultPan);
+document.addEventListener('visibilitychange', () => { if (document.hidden) resetResultPan(); });
+document.querySelectorAll('#mainNavigation .tab').forEach(tab => tab.addEventListener('click', resetResultPan));
+
+function bindResultPan(viewport) {
+  viewport.addEventListener('pointerdown', event => {
+    if (!PAN_SPACE || RESULT_ZOOM <= 1 || event.button !== 0) return;
+    event.preventDefault();
+    PAN_DRAG = { viewport, pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+                 left: viewport.scrollLeft, top: viewport.scrollTop };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add('is-panning');
+  });
+  viewport.addEventListener('pointermove', event => {
+    if (!PAN_DRAG || event.pointerId !== PAN_DRAG.pointerId) return;
+    event.preventDefault();
+    viewport.scrollLeft = PAN_DRAG.left - (event.clientX - PAN_DRAG.x);
+    viewport.scrollTop = PAN_DRAG.top - (event.clientY - PAN_DRAG.y);
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) viewport.addEventListener(type, endResultPan);
+  viewport.addEventListener('click', event => {
+    if (PAN_SPACE) { event.preventDefault(); event.stopPropagation(); }
+  }, true);
+  updatePanCursor();
+}
+
+function syncResultNavigation() {
+  const previous = el('aggResult').querySelector('[data-agg-previous]');
+  const next = el('aggResult').querySelector('[data-agg-next]');
+  if (!previous || !next) return;
+  previous.disabled = RESULT_NAVIGATING || !RESULT_NAVIGATION?.canPrevious();
+  next.disabled = RESULT_NAVIGATING || !RESULT_NAVIGATION?.canNext();
+}
+
+async function navigateResult(direction) {
+  if (RESULT_NAVIGATING || !RESULT_NAVIGATION) return;
+  if (!(direction === 'previous' ? RESULT_NAVIGATION.canPrevious() : RESULT_NAVIGATION.canNext())) return;
+  const position = { x: window.scrollX, y: window.scrollY };
+  el('aggResult').style.minHeight = `${el('aggResult').offsetHeight}px`;
+  RESULT_NAVIGATING = true;
+  syncResultNavigation();
+  try { await RESULT_NAVIGATION[direction](); }
+  catch (error) { el('aggStatus').textContent = `切换结果失败：${error.message}`; }
+  finally { RESULT_NAVIGATING = false; syncResultNavigation(); window.scrollTo(position.x, position.y); }
+}
 
 function syncAggregateControls() {
+  syncResultNavigation();
   const selection = gallerySelection('aggregate');
   const busy = AGG_BUSY || selection.busy;
   el('aggBatchStart').disabled = busy || !selection.selected.length;
+  const history = aggregateHistorySelection();
+  el('aggHistoryRerun').disabled = AGG_BUSY || history.busy || (!history.record_ids.length && !history.folder_ids.length);
   el('aggStop').hidden = !AGG_BUSY;
   el('aggStop').disabled = !ACTIVE_JOB || STOP_PENDING;
   el('aggStop').textContent = STOP_PENDING ? '正在停止…' : '停止推理';
@@ -70,14 +154,20 @@ function showAggregateError(error, filename) {
 
 /** pane: 'images' | 'result' */
 function switchAggregatePane(pane) {
+  resetResultPan();
+  const changed = !el(AGG_PANES[pane]).classList.contains('active');
   Object.entries(AGG_PANES).forEach(([key, id]) => el(id).classList.toggle('active', key === pane));
   document.querySelectorAll('.subtab[data-agg]').forEach((tab) => {
     tab.classList.toggle('active', tab.dataset.agg === pane);
   });
   el('aggRefresh').hidden = pane === 'result';
+  el('aggFolderMove').hidden = pane !== 'history';
+  el('aggHistoryRerun').hidden = pane !== 'history';
+  el('aggImageFolderMove').hidden = pane !== 'images';
   if (pane === 'history') loadAggregateHistory();
+  if (pane === 'result') applyResultZoom();
   if (pane !== 'images') hideHoverPreview();
-  window.scrollTo(0, 0);
+  if (changed && !RESULT_NAVIGATING) window.scrollTo(0, 0);
 }
 
 document.querySelectorAll('.subtab[data-agg]').forEach((tab) => {
@@ -90,7 +180,8 @@ function stepLine(steps) {
     const step = (steps || {})[key];
     if (key === 'pose' && !step?.enabled) return '';
     if (!step || !step.enabled) return `<span class="agg-step is-off">${esc(label)}：${esc(step?.reason || '未启用')}</span>`;
-    const detail = key === 'detect' ? `${step.count} 个人头`
+    const comparison = step.mirror_selection;
+    const detail = key === 'detect' ? `${step.count} 个人头${comparison ? ` · 原图 ${comparison.original_count} / 镜像 ${comparison.mirror_count} · 采用${comparison.selected === 'mirror' ? '镜像' : '原图'}` : ''}`
       : key === 'face' ? `检出 ${step.face_count} 张 · 识别 ${step.matched} · 库内 ${step.library_count} 人 · 阈值 ${step.threshold}`
         : key === 'multimodal' ? `完成 ${step.completed}/${step.count} 个目标 · 失败 ${step.failed} · 提示词 ${step.prompt_config_id.slice(0, 8)}`
         : `${step.count} 人 · 绑定 ${step.bound} · 未绑定 ${step.unbound}`;
@@ -194,9 +285,27 @@ function paintHeads() {
   }
 }
 
-function renderAggregateResult(record, filename) {
+function applyResultZoom() {
+  if (RESULT_ZOOM <= 1) resetResultPan();
+  if (!ACTIVE_RECORD) return;
   const box = el('aggResult');
+  const viewport = box.querySelector('[data-role="zoomviewport"]');
+  if (!viewport) return;
+  const width = Math.min(viewport.clientWidth, window.innerHeight * .76 * ACTIVE_RECORD.image_width / ACTIVE_RECORD.image_height) * RESULT_ZOOM;
+  const viewer = box.querySelector('[data-role="viewer"]');
+  viewer.style.width = `${width}px`;
+  viewer.style.height = `${width * ACTIVE_RECORD.image_height / ACTIVE_RECORD.image_width}px`;
+  box.querySelector('[data-agg-zoom-value]').textContent = `${Math.round(RESULT_ZOOM * 100)}%`;
+}
+window.addEventListener('resize', applyResultZoom);
+
+function renderAggregateResult(record, filename, navigation = null) {
+  const box = el('aggResult');
+  endResultPan();
+  const oldViewport = box.querySelector('[data-role="zoomviewport"]');
+  const offset = { x: oldViewport?.scrollLeft || 0, y: oldViewport?.scrollTop || 0 };
   ACTIVE_RECORD = record;
+  RESULT_NAVIGATION = navigation;
   ACTIVE_FILTER = 'all';
   ACTIVE_STATE = 'all';
   const summary = record.summary || {};
@@ -232,6 +341,9 @@ function renderAggregateResult(record, filename) {
     `<div class="agg-steps">${stepLine(record.steps)}</div>` +
     (notes.length ? `<p class="hint">${esc(notes.join('；'))}</p>` : '') +
     `<div class="viewer-bar aggregate-detail-controls">` +
+    '<label>缩放 <input type="range" data-agg-zoom min="25" max="300" step="5" aria-label="聚合图片缩放"><b data-agg-zoom-value></b></label>' +
+    '<button class="btn small ghost" data-agg-zoom-reset>重置缩放</button>' +
+    '<span class="hint">超过 100% 时按住空格拖拽图片</span>' +
     `<label><input type="checkbox" data-role="alwaystag"> 常显标签</label>` +
     `<label><input type="checkbox" data-role="showpoints"> 显示为点</label>` +
     `<div class="chips" data-role="aggfilter">` +
@@ -250,9 +362,11 @@ function renderAggregateResult(record, filename) {
     `没绑上的人脸 / 姿势在清单里列出来，不会硬塞给某个人头。` +
     (record.steps?.multimodal?.enabled ? 'VLM 动作由对应人头裁剪直接归属，无需 Pose 框匹配。' : '') + '</p>' +
     '</div></div></div></div>' +
-    `<div class="viewer" data-role="viewer">` +
+    `<div class="aggregate-zoom-shell"><div class="aggregate-zoom-viewport" data-role="zoomviewport"><div class="viewer aggregate-result-viewer" data-role="viewer">` +
     `<img class="base" data-role="baseimg" src="${esc(record.source_url || `/images/${encodeURIComponent(filename)}`)}" alt="聚合图">` +
-    `<div class="boxes" data-role="boxes"></div></div>` +
+    `<div class="boxes" data-role="boxes"></div></div></div>` +
+    '<button type="button" class="aggregate-result-nav is-previous" data-agg-previous aria-label="上一个" title="上一个">‹</button>' +
+    '<button type="button" class="aggregate-result-nav is-next" data-agg-next aria-label="下一个" title="下一个">›</button></div>' +
     `<div class="viewer-foot"><span id="aggResultCount"></span>` +
     (record.result_url ? `<a href="${esc(record.result_url)}" target="_blank">后端渲染图（对照）</a>` : '') +
     `</div>` +
@@ -260,6 +374,19 @@ function renderAggregateResult(record, filename) {
     `<th>中心 (cx, cy)</th><th>左上右下 (x1, y1, x2, y2)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 
 
+  const zoomInput = box.querySelector('[data-agg-zoom]');
+  zoomInput.value = String(RESULT_ZOOM * 100);
+  zoomInput.addEventListener('input', () => { RESULT_ZOOM = Number(zoomInput.value) / 100; applyResultZoom(); });
+  box.querySelector('[data-agg-zoom-reset]').addEventListener('click', () => {
+    RESULT_ZOOM = 1; zoomInput.value = '100'; applyResultZoom();
+  });
+  applyResultZoom();
+  const viewport = box.querySelector('[data-role="zoomviewport"]');
+  viewport.scrollLeft = offset.x; viewport.scrollTop = offset.y;
+  bindResultPan(viewport);
+  box.querySelector('[data-agg-previous]').addEventListener('click', () => navigateResult('previous'));
+  box.querySelector('[data-agg-next]').addEventListener('click', () => navigateResult('next'));
+  syncResultNavigation();
   const tagToggle = box.querySelector('[data-role="alwaystag"]');
   tagToggle.checked = ALWAYS_TAGS;
   const pointToggle = box.querySelector('[data-role="showpoints"]');
@@ -292,7 +419,7 @@ async function loadAggregate() {
   if (!AGG_BUSY) {
     try {
       const { job } = await api('/api/aggregate/jobs/active');
-      if (job) {
+      if (job && !job.mirror) {
         ACTIVE_JOB = job.job_id;
         STOP_PENDING = !!job.cancel_requested;
         setAggregateBusy(true);
@@ -334,9 +461,8 @@ el('aggStop').addEventListener('click', async () => {
   }
 });
 
-el('aggBatchStart').addEventListener('click', async () => {
-  const filenames = gallerySelection('aggregate').selected;
-  if (AGG_BUSY || !filenames.length) return;
+async function startAggregateBatch(endpoint, payload, errorSource) {
+  if (AGG_BUSY) return;
   setAggregateBusy(true);
   ACTIVE_RECORD = null;
   el('aggStatus').textContent = '';
@@ -344,21 +470,34 @@ el('aggBatchStart').addEventListener('click', async () => {
   switchAggregatePane('result');
   el('aggResult').textContent = '批量任务正在准备，完成的图片可在上方逐张查看。';
   try {
-    const job = await api('/api/aggregate/batch', {
+    const job = await api(endpoint, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filenames, multimodal: !!el('aggMultimodal').checked }),
+      body: JSON.stringify({ ...payload, multimodal: !!el('aggMultimodal').checked }),
     });
     await followBatch(job, renderAggregateResult, trackJob);
-  } catch (error) { showAggregateError(error, filenames[0]); }
+  } catch (error) { showAggregateError(error, errorSource); }
   finally { finishJob(); }
+}
+
+el('aggBatchStart').addEventListener('click', () => {
+  const filenames = gallerySelection('aggregate').selected;
+  if (filenames.length) return startAggregateBatch('/api/aggregate/batch', { filenames }, filenames[0]);
 });
+el('aggHistoryRerun').addEventListener('click', () => {
+  const { record_ids, folder_ids, busy } = aggregateHistorySelection();
+  if (!busy && (record_ids.length || folder_ids.length)) {
+    return startAggregateBatch('/api/aggregate/history/rerun', { record_ids, folder_ids }, '重新推理');
+  }
+});
+document.addEventListener('aggregate-history-selection-change', syncAggregateControls);
+
 document.addEventListener('gallery-selection-change', event => {
   if (event.detail.kind === 'aggregate') syncAggregateControls();
 });
 
-setupAggregateHistory(row => {
+setupAggregateHistory((row, navigation) => {
   el('aggBatchPanel').hidden = true;
-  renderAggregateResult(row.result, row.source);
+  renderAggregateResult(row.result, row.source, navigation);
   switchAggregatePane('result');
 });
 el('aggRefresh').addEventListener('click', () => {

@@ -1,3 +1,4 @@
+import { openFolderDialog } from './folder-dialog.js?v=124';
 import { el, esc, api, banner, showError } from './core.js?v=95';
 import { readDetectOptions } from './models.js?v=95';
 import { bindImageHover, hideHoverPreview } from './preview.js?v=95';
@@ -8,8 +9,9 @@ import { importBehaviorRecords } from './annotator.js?v=95';
 /* ==================== 图片推理 ==================== */
 
 const GALLERY_STATE = {
-  images: { grid: 'imageGrid', prefix: 'image', selected: new Set(), items: [], busy: false },
-  aggregate: { grid: 'aggImageGrid', prefix: 'aggImage', selected: new Set(), items: [], busy: false },
+  images: { folder: '', grid: 'imageGrid', prefix: 'image', selected: new Set(), items: [], busy: false },
+  aggregate: { folder: '', grid: 'aggImageGrid', prefix: 'aggImage', selected: new Set(), items: [], busy: false },
+  mirror: { folder: '', grid: 'mirrorImageGrid', prefix: 'mirrorImage', selected: new Set(), items: [], busy: false },
   history: { grid: 'inferenceHistoryGrid', prefix: 'history', selected: new Set(), items: [], busy: false },
 };
 let ACTIVE_INFERENCE_ID = null;
@@ -26,10 +28,14 @@ function syncGallerySelection(kind) {
   if (kind === 'history') el('historyBehaviorImport').disabled = busy || !state.selected.size;
   el(`${state.prefix}SelectionCount`).textContent = state.busy ? '正在删除…' : `已选 ${state.selected.size} 张`;
   document.querySelectorAll(`#${state.grid} figure`).forEach((figure) => {
-    const selected = state.selected.has(figure.dataset.item);
+    const members = figure.dataset.members ? JSON.parse(figure.dataset.members) : null;
+    const selected = members ? members.length > 0 && members.every(id => state.selected.has(id)) : state.selected.has(figure.dataset.item);
     figure.classList.toggle('is-selected', selected);
     const check = figure.querySelector('[data-gallery-select]');
-    if (check) { check.checked = selected; check.disabled = busy; }
+    if (check) {
+      check.checked = selected; check.disabled = busy;
+      check.indeterminate = !!members && !selected && members.some(id => state.selected.has(id));
+    }
     const del = figure.querySelector('.del-btn');
     if (del) del.disabled = busy;
   });
@@ -108,24 +114,68 @@ async function loadImageGallery(kind, onImageClick) {
   try {
     const data = await api('/api/images');
     hideHoverPreview();
-    setGalleryItems(kind, data.images.map((img) => img.filename));
-    if (!data.images.length) {
+    let path = state.folder || '';
+    state.folders = data.folders || [];
+    state.images = data.images;
+    if (path && !state.folders.includes(path)) path = '';
+    state.folder = path;
+    const scope = data.images.filter(image => !path || image.relative_path?.startsWith(path + '/'));
+    setGalleryItems(kind, scope.map(image => image.filename));
+    if (!data.images.length && !state.folders.length) {
       box.innerHTML = '<div class="empty">暂无图片，请先上传</div>';
       syncGallerySelection(kind);
       return;
     }
     box.innerHTML = '';
-    data.images.forEach((img) => {
+    if (path) {
+      const back = document.createElement('button');
+      back.className = 'btn small ghost'; back.textContent = `返回上级 · ${path}`;
+      back.style.gridColumn = '1 / -1';
+      back.addEventListener('click', () => { state.folder = path.split('/').slice(0, -1).join('/'); state.reload(); });
+      box.appendChild(back);
+    }
+    const childFolders = new Set();
+    for (const folder of state.folders) {
+      if (path && !folder.startsWith(path + '/')) continue;
+      const rest = path ? folder.slice(path.length + 1) : folder;
+      if (rest) childFolders.add(rest.split('/')[0]);
+    }
+    for (const image of scope) {
+      const relative = image.relative_path || image.filename;
+      const rest = path ? relative.slice(path.length + 1) : relative;
+      if (rest.includes('/')) childFolders.add(rest.split('/')[0]);
+    }
+    for (const name of childFolders) {
+      const child = path ? `${path}/${name}` : name;
+      const members = scope.filter(image => image.relative_path?.startsWith(child + '/')).map(image => image.filename);
+      const figure = document.createElement('figure');
+      figure.dataset.members = JSON.stringify(members);
+      figure.innerHTML = `<div class="agg-folder-preview" aria-hidden="true">📁</div><figcaption>${esc(name)}<br>${members.length} 张图片</figcaption><label class="selection-check"><input type="checkbox" data-gallery-select aria-label="选择文件夹 ${esc(name)}"></label>`;
+      figure.querySelector('label').addEventListener('click', event => event.stopPropagation());
+      figure.querySelector('input').addEventListener('change', event => {
+        for (const id of members) { if (event.target.checked) state.selected.add(id); else state.selected.delete(id); }
+        syncGallerySelection(kind);
+      });
+      figure.addEventListener('click', () => {
+        if (state.busy) return;
+        state.folder = child; state.reload();
+      });
+      box.appendChild(figure);
+    }
+    scope.filter(image => {
+      const relative = image.relative_path || image.filename;
+      return !(path ? relative.slice(path.length + 1) : relative).includes('/');
+    }).forEach((img) => {
       const fig = document.createElement('figure');
-      fig.title = (kind === 'aggregate' ? '点击选择：' : '点击推理：') + img.filename;
-      fig.innerHTML = `<img src="${esc(img.url)}" alt=""><figcaption>${esc(img.filename)}</figcaption>`;
+      fig.title = (kind !== 'images' ? '点击选择：' : '点击推理：') + (img.display_name || img.filename);
+      fig.innerHTML = `<img src="${esc(img.url)}" alt=""><figcaption>${esc(img.display_name || img.filename)}</figcaption>`;
 
-      addGalleryControls(fig, kind, img.filename, img.filename);
+      addGalleryControls(fig, kind, img.filename, img.display_name || img.filename);
       bindImageHover(fig, () => ({ src: img.url, name: img.filename }));
       fig.addEventListener('click', () => {
         if (state.busy) return;
         hideHoverPreview();
-        if (kind === 'aggregate') {
+        if (kind === 'aggregate' || kind === 'mirror') {
           const check = fig.querySelector('[data-gallery-select]');
           check.click();
           return;
@@ -139,6 +189,40 @@ async function loadImageGallery(kind, onImageClick) {
     box.innerHTML = `<div class="empty">加载失败：${esc(e instanceof Error ? e.message : String(e))}</div>`;
   }
 }
+
+function openImageFolderDialog(kind) {
+  const state = GALLERY_STATE[kind];
+  if (state.busy) return;
+  const post = data => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  openFolderDialog({
+    description: `已选 ${state.selected.size} 张图片`,
+    canMove: state.selected.size > 0,
+    choices: () => [
+      ...(state.folders || []).map(path => ({
+        id: path, name: path.split('/').join(' / '),
+        count: (state.images || []).filter(image => image.relative_path?.startsWith(path + '/')).length,
+      })),
+      { id: '', name: '根目录 / 未分类', count: (state.images || []).filter(image => !image.relative_path?.includes('/')).length },
+    ],
+    create: async name => {
+      const folder = await api('/api/image-folders', post({ name, parent: state.folder || '' }));
+      await state.reload();
+      return { id: folder.path, name: folder.name };
+    },
+    move: async target => {
+      state.busy = true; syncGallerySelection(kind);
+      try {
+        await api('/api/image-folders/move', post({ filenames: [...state.selected], target }));
+        state.selected.clear();
+        await state.reload();
+      } finally { state.busy = false; syncGallerySelection(kind); }
+    },
+  });
+}
+
+el('imageFolderMove').addEventListener('click', () => openImageFolderDialog('images'));
+el('mirrorImageFolderMove').addEventListener('click', () => openImageFolderDialog('mirror'));
+el('aggImageFolderMove').addEventListener('click', () => openImageFolderDialog('aggregate'));
 
 async function detectImage(filename) {
   const box = el('detectResult');

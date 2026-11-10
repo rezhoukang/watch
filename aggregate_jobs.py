@@ -8,7 +8,8 @@ from pathlib import Path
 import aggregate
 
 LABELS = {'prepare': '准备图片与模型', 'detect': '目标检测', 'face': '人脸识别',
-          'pose': 'Pose 姿势检测', 'multimodal': 'VLM 动作分析', 'render': '生成结果'}
+          'pose': 'Pose 姿势检测', 'multimodal': 'VLM 动作分析', 'render': '生成结果',
+          'mirror_prepare': '准备镜像图', 'mirror_detect': '镜像目标检测', 'mirror_render': '生成镜像结果'}
 _lock = threading.RLock()
 _runner = threading.Lock()
 JOBS: dict[str, dict] = {}

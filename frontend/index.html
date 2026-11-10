@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>本地视觉训练平台</title>
-<link rel="stylesheet" href="/style.css?v=70">
+<title>坐姿视觉识别平台</title>
+<link rel="stylesheet" href="/style.css?v=78">
 </head>
 <body>
 <div class="app">
   <header class="topbar">
-    <h1>本地视觉训练平台</h1>
+    <h1>坐姿视觉识别平台</h1>
     <span id="envStatus" class="badge">检查中…</span>
     <button id="toggleExtraFeatures" class="btn small ghost more-features" type="button" aria-expanded="false" aria-controls="mainNavigation">更多功能</button>
   </header>
@@ -23,6 +23,7 @@
     <button class="tab" data-tab="dataset" data-extra-tab hidden>数据集管理</button>
     <button class="tab" data-tab="aggregate">聚合推理</button>
     <button class="tab" data-tab="video-aggregate">视频聚合推理</button>
+    <button class="tab" data-tab="mirror" data-extra-tab hidden>镜像推理</button>
     <button class="tab" data-tab="actions" data-extra-tab hidden>动作识别</button>
   </nav>
 
@@ -32,10 +33,13 @@
       <div class="col">
         <h2>图片</h2>
         <div class="drop" id="dropZone">
-          <p>点击选择 或 拖拽图片到这里</p>
+          <p>点击选择 或 拖拽图片、文件夹到这里</p>
           <input type="file" id="fileInput" accept="image/*" multiple>
         </div>
         <button class="btn" id="uploadBtn" disabled>上传图片</button>
+        <button class="btn ghost" id="uploadFolderBtn">上传文件夹</button>
+        <input id="uploadFolderInput" type="file" webkitdirectory multiple hidden>
+        <div class="status" id="folderUploadStatus" role="status"></div>
         <div class="status" id="status"></div>
       </div>
       <div class="col">
@@ -47,6 +51,51 @@
         <button class="btn" id="uploadVideoBtn" disabled>上传视频</button>
         <div class="status" id="videoStatus"></div>
       </div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-mirror">
+    <div class="toolbar"><strong>镜像推理</strong><span class="hint">目标检测 · 原图与水平镜像分别推理</span></div>
+    <nav class="subnav">
+      <button class="subtab active" data-mirror="images">待推理图片</button>
+      <button class="subtab" data-mirror="history">镜像结果</button>
+      <button class="subtab" data-mirror="detail">对比明细</button>
+      <div class="subnav-right">
+        <button class="btn small" id="mirrorImageFolderMove">移入文件夹</button>
+        <button class="btn small ghost" id="mirrorRefresh">刷新列表</button>
+      </div>
+    </nav>
+    <div class="subpanel active" id="mirror-pane-images">
+      <div class="gallery-bar">
+        <label><input type="checkbox" id="mirrorImageSelectAll"> 全选</label>
+        <button class="btn small ghost" id="mirrorImageClearSelection">取消选择</button>
+        <button class="btn small danger" id="mirrorImageDeleteSelected" disabled>删除选中图片</button>
+        <button class="btn small" id="mirrorStart" disabled>推理</button>
+        <span id="mirrorImageSelectionCount" role="status">已选 0 张</span>
+      </div>
+      <div class="grid" id="mirrorImageGrid"></div>
+    </div>
+    <div class="subpanel" id="mirror-pane-history">
+      <div class="gallery-bar">
+        <label>人数对比 <select id="mirrorCountFilter">
+          <option value="1">原图人多</option>
+          <option value="0">原图等于镜像</option>
+          <option value="-1">镜像人多</option>
+        </select></label>
+      </div>
+      <p class="status" id="mirrorHistoryStatus"></p>
+      <div class="grid" id="mirrorHistoryGrid"></div>
+    </div>
+    <div class="subpanel" id="mirror-pane-detail">
+      <div class="gallery-bar"><button class="btn small danger" id="mirrorStop" hidden>停止推理</button><span id="mirrorStatus" role="status"></span></div>
+      <div id="mirrorProgress"></div>
+      <h3 id="mirrorResultName"></h3>
+      <div class="gallery-bar" id="mirrorDisplayControls" hidden>
+        <label><input type="checkbox" id="mirrorShowMarkers" checked> 显示框／点</label>
+        <label><input type="checkbox" id="mirrorShowPoints"> 显示为点</label>
+        <label><input type="checkbox" id="mirrorShowLabels" checked> 显示标签</label>
+      </div>
+      <div id="mirrorComparison" class="mirror-comparison"></div>
     </div>
   </section>
 
@@ -149,6 +198,7 @@
       <button class="subtab" data-sub="history">推理结果图片</button>
       <div class="subnav-right">
         <span class="subnav-status" id="detResultName"></span>
+        <button class="btn small" id="imageFolderMove">移入文件夹</button>
         <button class="btn small ghost" id="refreshImages">刷新列表</button>
       </div>
     </nav>
@@ -329,7 +379,7 @@
           <div class="aggregate-help-content">
             <p class="hint" id="aggMultimodalHint" hidden>固定两阶段策略一：先完成全部 Head 抬头/低头，再完成全部扩展 ROI 动作补充；使用独立 Head 与完整动作配置。Qwen3-VL 4B、4-bit、A 基线，扩展比例 0.85 / 0 / 1.30。</p>
             <p>人脸识别固定：SCRFD 人脸置信度 0.5 · 识别阈值 0.3 · 质量门槛 0.5 / 24px / 50（已锁死，不开放输入）。</p>
-            <p>目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.35（已锁死，前端不开放）。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
+            <p>目标检测固定用「图片推理 → 目标检测」那套：medium.pt 0.45 为基准 + RT-DETRv4 0.25 补齐，合并 IoU ≤ 0.1、自定义 IoU 生效置信度 &gt; 0.35（已锁死，前端不开放）。原图与水平镜像分别检测，采用数量更多的一组，相同优先原图，镜像框转回原图坐标。绑定固定为<b>链式贪心 + 一一对应</b>：只保留 IoU &gt; 0 的配对，按 IoU 降序占位（IoU 相同时中心距离近的先占），一个人头最多绑一个姿势。结果只画 head 框，姓名与姿势状态都挂在这个框上。</p>
           </div>
         </div>
       </div>
@@ -341,6 +391,9 @@
       <button class="subtab" data-agg="result">聚合结果明细</button>
       <div class="subnav-right">
         <span class="subnav-status" id="aggResultName"></span>
+        <button class="btn small" id="aggHistoryRerun" hidden disabled>重新推理</button>
+        <button class="btn small" id="aggImageFolderMove">移入文件夹</button>
+        <button class="btn small" id="aggFolderMove" hidden>移入文件夹</button>
         <button class="btn small ghost" id="aggRefresh">刷新列表</button>
       </div>
     </nav>
@@ -358,16 +411,43 @@
     </div>
 
     <div class="subpanel" id="aggregate-pane-history">
+      <div class="gallery-bar" id="aggFolderBreadcrumb" hidden>
+        <button class="btn small ghost" id="aggFolderBack" hidden>返回上级文件夹</button>
+        <b id="aggFolderLocation">全部文件夹 / 未分类结果</b>
+      </div>
       <div class="gallery-bar">
         <label><input type="checkbox" id="aggHistoryAll"> 全选</label>
         <button class="btn small ghost" id="aggHistoryClear" disabled>取消选择</button>
-        <button class="btn small danger" id="aggHistoryDelete" disabled>删除选中记录</button>
+        <button class="btn small danger" id="aggHistoryDelete" disabled>删除选中项</button>
+        <label>导出图片
+          <select id="aggExportCompression">
+            <option value="balanced" selected>均衡压缩（1600px / JPEG 80）</option>
+            <option value="compact">更小体积（1280px / JPEG 65）</option>
+            <option value="original">原图质量</option>
+          </select>
+        </label>
         <button class="btn small" id="aggHistoryExport" disabled>导出 JSON + HTML</button>
         <span id="aggHistoryCount" role="status">已选 0 条</span>
       </div>
       <p id="aggHistoryStatus" class="status" role="status"></p>
       <div id="aggHistoryGrid" class="grid"></div>
     </div>
+    <dialog id="aggFolderDialog" class="agg-folder-dialog" aria-labelledby="aggFolderDialogTitle">
+      <div class="agg-folder-dialog-content">
+        <h3 id="aggFolderDialogTitle">移入文件夹</h3>
+        <div class="agg-folder-create">
+          <input id="aggFolderName" type="text" maxlength="80" placeholder="新文件夹名称" aria-label="新文件夹名称">
+          <button class="btn small" id="aggFolderCreate">新建文件夹</button>
+        </div>
+        <input id="aggFolderTarget" type="hidden">
+        <p id="aggFolderDialogStatus" class="status" role="status"></p>
+        <div id="aggFolderChoices" class="agg-folder-choices" role="radiogroup" aria-label="目标文件夹"></div>
+        <div class="agg-folder-dialog-actions">
+          <button class="btn small ghost" id="aggFolderCancel">取消</button>
+          <button class="btn small" id="aggFolderConfirm" disabled>确认移入</button>
+        </div>
+      </div>
+    </dialog>
     <div class="subpanel" id="aggregate-pane-result">
       <button class="btn small danger" id="aggStop" hidden>停止推理</button>
       <div id="aggBatchPanel" hidden></div>
@@ -381,7 +461,7 @@
     <div class="toolbar">
       <button class="btn" id="vaggUpload">导入 MP4</button>
       <input id="vaggUploadInput" type="file" accept=".mp4,video/mp4" hidden>
-      <label>视频 <select id="vaggVideo"><option value="">选择 MP4</option></select></label>
+      <label hidden>视频 <select id="vaggVideo"><option value="">选择 MP4</option></select></label>
       <button class="btn small ghost" id="vaggRefresh">刷新</button>
       <label>抽帧间隔 <input id="vaggInterval" type="number" min="0.1" max="86400" step="0.1" value="1"> 秒</label>
       <button class="btn" id="vaggStart">开始视频聚合</button>
@@ -589,6 +669,6 @@
   <div class="cap" id="hoverPreviewCap"></div>
 </div>
 
-<script type="module" src="/app.js?v=115"></script>
+<script type="module" src="/app.js?v=132"></script>
 </body>
 </html>

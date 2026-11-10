@@ -1,6 +1,6 @@
 import { el, esc, api } from './core.js?v=95';
 
-function renderBatch(job, onResult) {
+function renderBatch(job, onSelect) {
   const panel = el('aggBatchPanel');
   panel.hidden = false;
   panel.innerHTML = `<div class="aggregate-progress" role="status">
@@ -12,21 +12,31 @@ function renderBatch(job, onResult) {
     ${job.results.filter(row => row.status === 'failed').map(row => `<p class="action-reason">${esc(row.source)}：${esc(row.error)}</p>`).join('')}
     </div>`;
   panel.querySelectorAll('[data-batch-index]').forEach(button => button.addEventListener('click', () => {
-    const row = job.results[Number(button.dataset.batchIndex)];
-    onResult(row.result, row.source);
+    onSelect(Number(button.dataset.batchIndex));
   }));
 }
 
 async function followBatch(initial, onResult, onJob) {
-  let job = initial, firstShown = false;
+  let job = initial, currentIndex = -1;
+  function adjacent(direction) {
+    const completed = job.results.flatMap((row, index) => row.status === 'completed' ? [index] : []);
+    return completed[completed.indexOf(currentIndex) + direction];
+  }
+  function showResult(index) {
+    const row = job.results[index];
+    if (row?.status !== 'completed') return;
+    currentIndex = index;
+    onResult(row.result, row.source, {
+      canPrevious: () => adjacent(-1) !== undefined,
+      canNext: () => adjacent(1) !== undefined,
+      previous: () => showResult(adjacent(-1)),
+      next: () => showResult(adjacent(1)),
+    });
+  }
   const update = () => {
     onJob?.(job);
-    renderBatch(job, onResult);
-    const first = job.results.find(row => row.status === 'completed');
-    if (first && !firstShown) {
-      onResult(first.result, first.source);
-      firstShown = true;
-    }
+    renderBatch(job, showResult);
+    if (currentIndex < 0) showResult(job.results.findIndex(row => row.status === 'completed'));
   };
   update();
   while (!['completed', 'failed', 'cancelled'].includes(job.status)) {
@@ -34,7 +44,7 @@ async function followBatch(initial, onResult, onJob) {
     job = await api(`/api/aggregate/jobs/${job.job_id}`, {}, 15000);
     update();
   }
-  if (!firstShown) el('aggResult').textContent = job.status === 'cancelled' ? '推理已停止，本批次尚无已完成结果。' : '本批次没有成功的结果，请查看上方失败原因。';
+  if (currentIndex < 0) el('aggResult').textContent = job.status === 'cancelled' ? '推理已停止，本批次尚无已完成结果。' : '本批次没有成功的结果，请查看上方失败原因。';
   return job;
 }
 

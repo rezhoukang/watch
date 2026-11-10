@@ -12,6 +12,8 @@
 结果图由后端画好（人头框 + 姓名标签 + 人脸框 + 骨架），前端直接展示即可。
 """
 import math
+import copy
+import tempfile
 import threading
 import time
 import uuid
@@ -180,6 +182,33 @@ def detect_targets(src: Path) -> dict:
             "fusion": fusion, "rule": rule}
 
 
+def detect_best_targets(src: Path, image, progress=None) -> dict:
+    original = detect_targets(src)
+    aggregate_actions.emit(progress, 'detect', '原图检测完成，正在检测水平镜像', 1, 2)
+    with tempfile.TemporaryDirectory(prefix='aggregate-mirror-') as folder:
+        mirrored_source = Path(folder) / 'mirror.png'
+        encoded, pixels = cv2.imencode('.png', cv2.flip(image, 1))
+        if not encoded:
+            raise ValueError('镜像图片生成失败')
+        pixels.tofile(str(mirrored_source))
+        mirrored = detect_targets(mirrored_source)
+    original_count = len(original['detections'])
+    mirror_count = len(mirrored['detections'])
+    use_mirror = mirror_count > original_count
+    selected = copy.deepcopy(mirrored if use_mirror else original)
+    if use_mirror:
+        width = image.shape[1]
+        for target in selected['detections']:
+            x1, y1, x2, y2 = target['bbox']
+            target['bbox'] = [round(width - x2, 2), y1, round(width - x1, 2), y2]
+    selected['mirror_selection'] = {
+        'original_count': original_count, 'mirror_count': mirror_count,
+        'selected': 'mirror' if use_mirror else 'original', 'coordinates': 'original',
+    }
+    selected['rule'] += f'；原图 {original_count} 个、镜像 {mirror_count} 个，采用{"镜像" if use_mirror else "原图"}检测结果，数量相同优先原图'
+    return selected
+
+
 def detect_poses(src: Path) -> dict:
     """固定复用图片 Pose 流程：排除无法判断者，再执行全图物体检测与关联。"""
     result = vision.detect_image(
@@ -254,7 +283,8 @@ def render(image: np.ndarray, targets: list[dict]) -> Image.Image:
 # ---------------------------------------------------------------- 主流程
 
 def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True,
-                    multimodal: bool = False, progress: aggregate_actions.Progress | None = None) -> dict:
+                    multimodal: bool = False, progress: aggregate_actions.Progress | None = None,
+                    mirror_selection: bool = True) -> dict:
     aggregate_actions.emit(progress, 'prepare', '准备图片与模型资源')
     if multimodal:
         with action_jobs.mutation():
@@ -262,12 +292,13 @@ def aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bo
             if not ready['available']:
                 raise ValueError(ready['message'])
             vlm.unload()
-            return _aggregate_image(src, face=face, pose=pose, save=save, multimodal=True, progress=progress)
-    return _aggregate_image(src, face=face, pose=pose, save=save, progress=progress)
+            return _aggregate_image(src, face=face, pose=pose, save=save, multimodal=True, progress=progress, mirror_selection=mirror_selection)
+    return _aggregate_image(src, face=face, pose=pose, save=save, progress=progress, mirror_selection=mirror_selection)
 
 
 def _aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: bool = True,
-                     multimodal: bool = False, progress: aggregate_actions.Progress | None = None) -> dict:
+                     multimodal: bool = False, progress: aggregate_actions.Progress | None = None,
+                    mirror_selection: bool = True) -> dict:
     """一次跑完 目标检测 → 人脸识别 → 姿势检测绑定，返回结构化结果 + 带标注的结果图。
 
     勾选「多模态姿态识别」时，固定采用先全体 Head、再全体扩展 ROI 的策略一：
@@ -284,12 +315,13 @@ def _aggregate_image(src: Path, *, face: bool = True, pose: bool = True, save: b
     # ---------- 1) 目标检测（固定：图片推理的目标检测）----------
     mark = time.perf_counter()
     aggregate_actions.emit(progress, 'detect', '正在执行目标检测')
-    detection = detect_targets(src)
+    detection = detect_best_targets(src, image, progress) if mirror_selection else detect_targets(src)
     targets = detection["detections"]
     aggregate_actions.emit(progress, 'detect', f'目标检测完成：{len(targets)} 个人头', 1, 1)
     steps["detect"] = {"enabled": True, "mode": detection["mode"], "weight": detection["weight"],
                        "imgsz": detection["imgsz"], "classes_used": detection["classes_used"],
                        "count": len(targets), "rule": detection["rule"], "fusion": detection["fusion"],
+                       "mirror_selection": detection.get("mirror_selection"),
                        "elapsed_seconds": round(time.perf_counter()-mark, 3)}
 
     # ---------- 2) 人脸识别：姓名贴到最贴合的人头 ----------

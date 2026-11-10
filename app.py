@@ -5,14 +5,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from web import common, status, media, history, detection, datasets, jobs, head_cuts, face_recognition, aggregate, actions, video_aggregate
+from web import common, status, media, history, detection, datasets, jobs, head_cuts, face_recognition, aggregate, actions, video_aggregate, mirror_inference
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-app = FastAPI(title="本地视觉训练平台")
+app = FastAPI(title="坐姿视觉识别平台")
 
 
 class NoCacheStaticFiles(StaticFiles):
@@ -40,7 +40,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     )
 
 
-for routes in (status, media, history, detection, datasets, jobs, head_cuts, face_recognition, aggregate, actions, video_aggregate):
+for routes in (status, media, history, detection, datasets, jobs, head_cuts, face_recognition, aggregate, actions, video_aggregate, mirror_inference):
     app.include_router(routes.router)
 
 # Register the catch-all static mount after every API router.

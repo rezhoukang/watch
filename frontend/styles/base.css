@@ -1,4 +1,4 @@
-/* 本地视觉训练平台 */
+/* 坐姿视觉识别平台 */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 /* Respect conditional visibility even when toolbar labels use display: flex. */
 [hidden] { display: none !important; }
